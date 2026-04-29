@@ -12,105 +12,157 @@ TARGET_TEXT = "Authorised UCITS, European Communities (Undertakings for Collecti
 DB_FILE = "data/cbi_shadow_db.csv"
 
 def standardize_date(date_str):
-    for fmt in ("%d %b %Y", "%d-%b-%y", "%d %B %Y"):
+    for fmt in ("%d %b %Y", "%d-%b-%y", "%d %B %Y", "%d-%b-%Y"):
         try:
-            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+            return datetime.strptime(date_str.strip(), fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
-    return date_str
+    return date_str.strip()
 
-def run_sync():
-    if os.path.exists(DB_FILE):
-        shadow_df = pd.read_csv(DB_FILE)
-    else:
-        shadow_df = pd.DataFrame(columns=["Fund Name", "Auth_Date", "First_Seen"])
-
-    print("Step 1: Fetching downloads page...")
+def download_pdf():
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
-    res = session.get(DOWNLOADS_PAGE, timeout=30)
-    print("  GET status: " + str(res.status_code))
-    print("  Content-Type: " + res.headers.get("Content-Type", "?"))
-    print("  Size: " + str(len(res.content)) + " bytes")
-
+    res = session.get(DOWNLOADS_PAGE)
     soup = BeautifulSoup(res.text, "html.parser")
-
-    vs  = soup.find("input", {"id": "__VIEWSTATE"})
-    vsg = soup.find("input", {"id": "__VIEWSTATEGENERATOR"})
-    ev  = soup.find("input", {"id": "__EVENTVALIDATION"})
-    print("  __VIEWSTATE found: " + str(vs is not None))
-    print("  __VIEWSTATEGENERATOR found: " + str(vsg is not None))
-    print("  __EVENTVALIDATION found: " + str(ev is not None))
-
-    if not vs or not vsg or not ev:
-        print("ERROR: ASP.NET form fields missing. Page snippet:")
-        print(res.text[:3000])
-        raise RuntimeError("ASP.NET form fields not found")
 
     payload = {
         "__EVENTTARGET": "",
         "__EVENTARGUMENT": "",
-        "__VIEWSTATE": vs["value"],
-        "__VIEWSTATEGENERATOR": vsg["value"],
-        "__EVENTVALIDATION": ev["value"]
+        "__VIEWSTATE": soup.find("input", {"id": "__VIEWSTATE"})["value"],
+        "__VIEWSTATEGENERATOR": soup.find("input", {"id": "__VIEWSTATEGENERATOR"})["value"],
+        "__EVENTVALIDATION": soup.find("input", {"id": "__EVENTVALIDATION"})["value"]
     }
 
-    print("Step 2: Looking for UCITS register link...")
-    found_link = False
     for link in soup.find_all("a", href=True):
         if TARGET_TEXT in link.text:
             match = re.search(r"'(.*?)'", link["href"])
             if match:
                 payload["__EVENTTARGET"] = match.group(1)
-                print("  Found it — __EVENTTARGET = " + match.group(1))
-                found_link = True
                 break
 
-    if not found_link:
-        print("WARNING: Target link not found. All links on page:")
-        for link in soup.find_all("a", href=True)[:30]:
-            print("  [" + link.text.strip()[:80] + "] -> " + link["href"][:80])
-        raise RuntimeError("Target link not found")
+    pdf_res = session.post(DOWNLOADS_PAGE, data=payload)
+    print("Downloaded " + str(round(len(pdf_res.content) / 1024)) + " KB")
+    return pdf_res.content
 
-    print("Step 3: POSTing to download PDF...")
-    pdf_res = session.post(DOWNLOADS_PAGE, data=payload, timeout=60)
-    print("  POST status: " + str(pdf_res.status_code))
-    print("  Content-Type: " + pdf_res.headers.get("Content-Type", "?"))
-    print("  Size: " + str(len(pdf_res.content)) + " bytes (" + str(round(len(pdf_res.content)/1024, 1)) + " KB)")
-    print("  First bytes: " + str(pdf_res.content[:20]))
-
-    if len(pdf_res.content) < 10000:
-        print("ERROR: Too small to be a PDF. Full response:")
-        print(pdf_res.text[:3000])
-        raise RuntimeError("Got HTML instead of PDF")
-
-    print("Step 4: Parsing PDF...")
-    new_found = []
+def parse_pdf(pdf_bytes):
+    """
+    Extract Fund Name, ManCo, Depositary, Auth_Date from the CBI register PDF.
+    Tries structured table extraction first, falls back to text parsing.
+    """
+    records = []
     date_pattern = re.compile(r"(\d{1,2}[- ](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[- ]\d{2,4})")
 
-    with pdfplumber.open(io.BytesIO(pdf_res.content)) as pdf:
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        print("PDF has " + str(len(pdf.pages)) + " pages")
+
         for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                for line in text.split("\n"):
-                    match = date_pattern.search(line)
-                    if match:
-                        name = re.sub(r"\s+", " ", line[:match.start()]).strip()
-                        if name and name not in shadow_df["Fund Name"].values:
-                            new_found.append({
-                                "Fund Name": name,
-                                "Auth_Date": standardize_date(match.group(0).strip()),
-                                "First_Seen": datetime.now().strftime("%Y-%m-%d")
-                            })
+            tables = page.extract_tables()
 
-    if new_found:
-        shadow_df = pd.concat([shadow_df, pd.DataFrame(new_found)], ignore_index=True)
+            if tables:
+                for table in tables:
+                    for row in table:
+                        if not row or not any(row):
+                            continue
+                        cells = [str(c).strip().replace("\n", " ") if c else "" for c in row]
 
-    shadow_df["Auth_Date_DT"] = pd.to_datetime(shadow_df["Auth_Date"], errors="coerce")
-    shadow_df = shadow_df.sort_values(by="Auth_Date_DT", ascending=False).drop(columns=["Auth_Date_DT"])
+                        # Skip header rows
+                        if cells[0].lower() in ("fund name", "name", "ucits", ""):
+                            continue
+
+                        # Find the date cell
+                        date_str = ""
+                        date_col = -1
+                        for i, cell in enumerate(cells):
+                            m = date_pattern.search(cell)
+                            if m:
+                                date_str = m.group(1)
+                                date_col = i
+                                break
+
+                        if not date_str or not cells[0] or len(cells[0]) < 3:
+                            continue
+
+                        # Columns are typically: Fund Name | ManCo | Depositary | Auth Date
+                        fund_name  = cells[0]
+                        manco      = cells[1] if len(cells) > 1 and date_col != 1 else ""
+                        depositary = cells[2] if len(cells) > 2 and date_col not in (1, 2) else ""
+
+                        records.append({
+                            "Fund Name":  fund_name,
+                            "ManCo":      manco,
+                            "Depositary": depositary,
+                            "Auth_Date":  standardize_date(date_str),
+                            "First_Seen": datetime.now().strftime("%Y-%m-%d")
+                        })
+
+            else:
+                # Fallback: text line parsing (original approach)
+                text = page.extract_text()
+                if text:
+                    for line in text.split("\n"):
+                        m = date_pattern.search(line)
+                        if m:
+                            name = re.sub(r"\s+", " ", line[:m.start()]).strip().rstrip(",")
+                            if len(name) > 3:
+                                records.append({
+                                    "Fund Name":  name,
+                                    "ManCo":      "",
+                                    "Depositary": "",
+                                    "Auth_Date":  standardize_date(m.group(1)),
+                                    "First_Seen": datetime.now().strftime("%Y-%m-%d")
+                                })
+
+    # Deduplicate by Fund Name
+    seen = set()
+    deduped = []
+    for r in records:
+        if r["Fund Name"] not in seen:
+            seen.add(r["Fund Name"])
+            deduped.append(r)
+
+    print("Extracted " + str(len(deduped)) + " unique funds")
+    return deduped
+
+def run_sync():
+    # Load existing DB if present
+    if os.path.exists(DB_FILE):
+        existing_df = pd.read_csv(DB_FILE)
+        existing_names = set(existing_df["Fund Name"].values)
+    else:
+        existing_df = pd.DataFrame(columns=["Fund Name", "ManCo", "Depositary", "Auth_Date", "First_Seen"])
+        existing_names = set()
+
+    # Download and parse
+    pdf_bytes = download_pdf()
+    records   = parse_pdf(pdf_bytes)
+
+    # Split into new vs existing
+    new_records = [r for r in records if r["Fund Name"] not in existing_names]
+
+    # Merge: fresh parse replaces existing (so ManCo/Depositary gets populated)
+    # Build full dataframe from fresh parse, preserving First_Seen from existing where possible
+    first_seen_map = {}
+    if not existing_df.empty and "First_Seen" in existing_df.columns:
+        for _, row in existing_df.iterrows():
+            first_seen_map[row["Fund Name"]] = row.get("First_Seen", "")
+
+    for r in records:
+        if r["Fund Name"] in first_seen_map and first_seen_map[r["Fund Name"]]:
+            r["First_Seen"] = first_seen_map[r["Fund Name"]]
+
+    df = pd.DataFrame(records, columns=["Fund Name", "ManCo", "Depositary", "Auth_Date", "First_Seen"])
+    df["Auth_Date_DT"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
+    df = df.sort_values("Auth_Date_DT", ascending=False).drop(columns=["Auth_Date_DT"])
+
     os.makedirs("data", exist_ok=True)
-    shadow_df.to_csv(DB_FILE, index=False)
-    print("Done — " + str(len(new_found)) + " new, " + str(len(shadow_df)) + " total")
+    df.to_csv(DB_FILE, index=False)
+
+    etf_count = df["Fund Name"].str.contains("ETF", case=False, na=False).sum()
+    manco_populated = (df["ManCo"] != "").sum()
+    print("Total funds: " + str(len(df)))
+    print("ETFs: " + str(etf_count))
+    print("New this run: " + str(len(new_records)))
+    print("ManCo populated: " + str(manco_populated) + " / " + str(len(df)))
 
 if __name__ == "__main__":
     run_sync()
