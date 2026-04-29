@@ -43,16 +43,7 @@ Go to **Settings → Pages** and set:
 
 The dashboard will be live at `https://daveirl.github.io/cbi-parse` within a minute.
 
-### 2. Add GitHub Secrets
-Go to **Settings → Secrets and variables → Actions** and add:
-
-| Secret | Value |
-|--------|-------|
-| `SENDGRID_API_KEY` | Your SendGrid API key (free tier = 100 emails/day) |
-| `EMAIL_TO` | Recipient address(es), comma-separated |
-| `EMAIL_FROM` | Verified sender address in your SendGrid account |
-
-### 3. Run Manually (optional)
+### 2. Run Manually (optional)
 Go to **Actions → ETF Intelligence — Weekly Sync → Run workflow** to trigger a sync immediately.
 
 ## Local Development
@@ -73,9 +64,8 @@ Open `docs/index.html` in your browser to preview the dashboard locally.
 
 2. **`generate_dashboard.py`** reads the CSV, enriches Platform/ManCo/Depositary fields using a known-issuer lookup table, and bakes everything into a self-contained `docs/index.html` with all data embedded as JSON.
 
-3. **`send_email.py`** sends a summary of new ETFs to the team via SendGrid.
 
-4. **`weekly_sync.yml`** orchestrates all of the above on a Friday morning schedule and commits the updated files back to the repo.
+3. **`weekly_sync.yml`** orchestrates all of the above on a Friday morning schedule and commits the updated files back to the repo.
 
 ## Notes
 
