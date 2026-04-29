@@ -6,7 +6,7 @@ Runs automatically every Friday via GitHub Actions, keeping a searchable shadow 
 
 ## Live Dashboard
 
-👉 **[daveirl.github.io/cbi-parse](https://daveirl.github.io/cbi-parse)**
+👉 **[daveirl.github.io/etf-intelligence](https://daveirl.github.io/etf-intelligence)**
 
 Features:
 - Search and filter all CBI-registered funds by name, platform, management company, depositary, and date
