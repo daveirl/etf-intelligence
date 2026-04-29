@@ -1,0 +1,44 @@
+name: ETF Intelligence — Weekly Sync
+
+on:
+  schedule:
+    # Every Friday at 07:00 UTC = 08:00 Irish Standard Time
+    - cron: '0 7 * * 5'
+  workflow_dispatch:   # Manual trigger button in GitHub Actions UI
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests beautifulsoup4 pdfplumber pandas openpyxl
+
+      - name: Run CBI sync script
+        run: python scripts/cbi_shadow_sync_v2.py
+
+      - name: Generate ETF Intelligence dashboard
+        run: python scripts/generate_dashboard.py
+
+      - name: Commit and push changes
+        run: |
+          git config user.name  "etf-intelligence-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/cbi_shadow_db.csv docs/index.html
+          git diff --staged --quiet || git commit -m "chore: weekly sync $(date +'%Y-%m-%d')"
+          git push
