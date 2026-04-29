@@ -25,15 +25,9 @@ def run_sync():
     else:
         shadow_df = pd.DataFrame(columns=["Fund Name", "Auth_Date", "First_Seen"])
 
+    print("Step 1: Fetching downloads page...")
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
-    res = session.get(DOWNLOADS_PAGE)
-    soup = BeautifulSoup(res.text, 'html.parser')
-
-    payload = {
-        "__EVENTTARGET": "",
-        "__EVENTARGUMENT": "",
-        "__VIEWSTATE": soup.find("input", {"id": "__VIEWSTATE"})['value'],
-        "__VIEWSTATEGENERATOR": soup.find("input", {"id": "__VIEWSTATEGENERATOR"})['value'],
-        "__EVENTVALIDATION": soup.find("input", {"id": "__EVENTVALIDATION"})['value']
-    }
+    res = session.get(DOWNLOADS_PAGE, timeout=30)
+    print(f"  GET status: {res.status_code}")
+    print(f"  Content-Type: {res.headers.get('Content-Type', '
