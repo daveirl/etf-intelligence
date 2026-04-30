@@ -84,6 +84,7 @@ select:focus,input:focus{border-color:var(--accent)}
 .bar-track{flex:1;background:var(--surface2);border-radius:3px;height:8px}
 .bar-fill{height:8px;border-radius:3px;transition:.4s}
 .bar-count{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;width:30px;text-align:right}
+.mono-date{font-family:'DM Mono',monospace;font-size:12px}
 .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .table-header{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
 .table-header h2{font-size:14px;font-weight:600}
@@ -103,18 +104,30 @@ tr:hover td{background:var(--surface2)}
 .search-input{flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;font-size:14px;outline:none}
 .search-input:focus{border-color:var(--accent)}
 .search-btn{background:var(--accent);color:#000;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px}
-.quick-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.quick-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;align-items:center}
 .quick-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:20px;cursor:pointer;font-size:12px}
 .quick-btn:hover{border-color:var(--accent);color:var(--accent)}
-#leiLoading{display:none;color:var(--muted);padding:20px 0;font-size:13px}
-.lei-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;margin-bottom:8px}
-.lei-name{font-weight:500;font-size:13px}
-.lei-sub{font-size:11px;color:var(--muted);margin-top:2px}
-.lei-code{font-family:'DM Mono',monospace;font-size:11px;color:var(--muted)}
-.lei-date{font-size:11px;color:var(--muted)}
-.lei-status-badge{font-size:10px;padding:3px 8px;border-radius:10px;font-weight:600}
-.issued{background:#3fb95022;color:var(--green)}
-.lapsed{background:#e05c2c22;color:#e05c2c}
+.spinner{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.lei-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:12px;transition:.15s}
+.lei-card:hover{border-color:var(--accent)}
+.lei-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.lei-card-title{font-weight:600;font-size:14px;line-height:1.4}
+.lei-card-sub{font-size:12px;color:var(--muted);margin-top:3px}
+.lei-status-badge{font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
+.issued{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
+.lapsed{background:#e05c2c22;color:#e05c2c;border:1px solid #e05c2c44}
+.lei-card-body{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+.lei-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:3px}
+.lei-field span{font-size:12px;color:var(--text)}
+.lei-field .mono{font-family:'DM Mono',monospace;font-size:11px;color:var(--accent)}
+.lei-card-footer{display:flex;align-items:center;gap:20px;padding-top:12px;border-top:1px solid var(--border)}
+.lei-footer-item{font-size:11px;color:var(--muted)}
+.lei-footer-item strong{color:var(--text);font-weight:500}
+.lei-cbi-match{background:#f0b42911;border:1px solid #f0b42933;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:12px}
+.lei-cbi-match-label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin-bottom:4px}
+.lei-cbi-row{display:flex;justify-content:space-between;color:var(--muted);margin-top:2px}
+.lei-cbi-row span:last-child{color:var(--text)}
 </style>
 </head>
 <body>
@@ -195,9 +208,13 @@ tr:hover td{background:var(--surface2)}
 
 <div id="tab-lei" class="tab-content">
 <div class="lei-wrap">
+  <div style="margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">LEI Lookup</h2>
+    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with LEI details for the 10 most recently authorised ETFs.</p>
+  </div>
   <div class="search-row">
-    <input class="search-input" id="leiQuery" placeholder="Search by name or LEI code&hellip;" />
-    <button class="search-btn" onclick="fetchLEI()">Search LEI</button>
+    <input class="search-input" id="leiQuery" placeholder="Search by fund name, ManCo, or LEI code&hellip;" />
+    <button class="search-btn" onclick="fetchLEI()">Search</button>
   </div>
   <div class="quick-btns">
     <span style="font-size:12px;color:var(--muted);align-self:center;margin-right:4px">Quick:</span>
@@ -211,8 +228,15 @@ tr:hover td{background:var(--surface2)}
     <button class="quick-btn" onclick="quickLEI('State Street')">State Street / SPDR</button>
     <button class="quick-btn" onclick="quickLEI('DWS')">Xtrackers / DWS</button>
   </div>
-  <div id="leiLoading">Searching GLEIF database&hellip;</div>
-  <div id="leiResults"></div>
+  <div id="leiLoading" style="display:none;padding:20px 0">
+    <div style="display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px">
+      <div class="spinner"></div> Querying GLEIF database&hellip;
+    </div>
+  </div>
+  <div id="leiSection">
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" id="leiSectionLabel">10 most recently authorised ETFs</div>
+    <div id="leiResults"></div>
+  </div>
 </div>
 </div>
 
@@ -227,12 +251,6 @@ let filtered = [...ALL_DATA];
 let page = 1;
 let activeFilter = 'all';
 const today = new Date('""" + TODAY + """');
-
-function switchTab(t) {
-  document.querySelectorAll('.tab').forEach((el,i) => el.classList.toggle('active',(i===0&&t==='cbi')||(i===1&&t==='lei')));
-  document.getElementById('tab-cbi').classList.toggle('active',t==='cbi');
-  document.getElementById('tab-lei').classList.toggle('active',t==='lei');
-}
 
 function init() {
   const mancos = [...new Set(ALL_DATA.map(r=>r.ManCo).filter(Boolean))].sort();
@@ -282,7 +300,7 @@ function renderTable() {
     '<tr><td>' + r['Fund Name'] + (r.is_etf?' <span class="etf-badge">ETF</span>':'') + '</td>' +
     '<td>' + (r.ManCo||'') + '</td>' +
     '<td>' + (r.Depositary||'') + '</td>' +
-    '<td style="font-family:\'DM Mono\',monospace;font-size:12px">' + (r.Auth_Date||'') + '</td></tr>'
+    '<td class="mono-date">' + (r.Auth_Date||'') + '</td></tr>'
   ).join('');
 }
 
@@ -322,36 +340,124 @@ function buildCharts() {
 async function fetchLEI() {
   const q = document.getElementById('leiQuery').value.trim();
   if (!q) return;
-  document.getElementById('leiLoading').style.display = 'block';
-  document.getElementById('leiResults').innerHTML = '';
+  setLeiLoading(true);
+  document.getElementById('leiSectionLabel').textContent = 'Search results for "' + q + '"';
   try {
     const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(q) + '&page[size]=20';
     const data = await (await fetch(url)).json();
-    renderLEI(data.data || []);
+    renderLEI(data.data || [], data.meta?.total || 0);
   } catch(e) {
     document.getElementById('leiResults').innerHTML = '<p style="color:#e05c2c">Error: '+e.message+'</p>';
   } finally {
-    document.getElementById('leiLoading').style.display = 'none';
+    setLeiLoading(false);
   }
 }
 
-function renderLEI(records) {
-  if (!records.length) { document.getElementById('leiResults').innerHTML = '<p style="color:var(--muted);padding:20px 0">No results found.</p>'; return; }
-  document.getElementById('leiResults').innerHTML =
-    '<div style="font-size:12px;color:var(--muted);margin-bottom:12px">'+records.length+' result(s)</div>' +
-    records.map(r => {
-      const attr=r.attributes||{},entity=attr.entity||{},reg=attr.registration||{};
-      const name=entity.legalName?.value||r.id,country=entity.legalAddress?.country||'';
-      const lei=r.id||'',date=(reg.initialRegistrationDate||'').substring(0,10);
-      const status=reg.status?.toLowerCase()==='issued'?'issued':'lapsed';
-      return '<div class="lei-card"><div><div class="lei-name">'+name+'</div><div class="lei-sub">'+country+'</div></div>' +
-             '<div class="lei-code">'+lei+'</div><div class="lei-date">'+date+'</div>' +
-             '<div><span class="lei-status-badge '+status+'">'+status.toUpperCase()+'</span></div></div>';
-    }).join('');
+async function autoLoadRecentETFs() {
+  setLeiLoading(true);
+  document.getElementById('leiSectionLabel').textContent = '10 most recently authorised ETFs';
+  // Get last 10 ETFs from our register data
+  const recentETFs = ALL_DATA.filter(r => r.is_etf).slice(0, 10);
+  const results = [];
+  for (const fund of recentETFs) {
+    try {
+      const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=1';
+      const data = await (await fetch(url)).json();
+      if (data.data && data.data.length > 0) {
+        // Attach our CBI register data to the result for cross-referencing
+        data.data[0]._cbi = fund;
+        results.push(data.data[0]);
+      }
+    } catch(e) {
+      // Skip individual failures silently
+    }
+  }
+  renderLEI(results, results.length);
+  setLeiLoading(false);
 }
 
-function quickLEI(q) { document.getElementById('leiQuery').value=q; fetchLEI(); }
-document.getElementById('leiQuery').addEventListener('keydown',e=>{ if(e.key==='Enter') fetchLEI(); });
+function setLeiLoading(on) {
+  document.getElementById('leiLoading').style.display = on ? 'block' : 'none';
+  document.getElementById('leiSection').style.display = on ? 'none' : 'block';
+}
+
+function renderLEI(records, total) {
+  if (!records.length) {
+    document.getElementById('leiResults').innerHTML = '<p style="color:var(--muted);padding:20px 0">No results found.</p>';
+    return;
+  }
+  document.getElementById('leiResults').innerHTML = records.map(r => {
+    const attr   = r.attributes || {};
+    const entity = attr.entity || {};
+    const reg    = attr.registration || {};
+    const addr   = entity.legalAddress || {};
+
+    const name        = entity.legalName?.value || r.id;
+    const lei         = r.id || '';
+    const country     = addr.country || '';
+    const city        = addr.city || '';
+    const legalForm   = entity.legalForm?.id || '';
+    const category    = entity.entityCategory || '';
+    const status      = (reg.status || '').toLowerCase() === 'issued' ? 'issued' : 'lapsed';
+    const registered  = (reg.initialRegistrationDate || '').substring(0, 10);
+    const lastUpdate  = (reg.lastUpdateDate || '').substring(0, 10);
+    const nextRenewal = (reg.nextRenewalDate || '').substring(0, 10);
+    const managingOU  = attr.managingOU?.name || '';
+
+    // CBI register cross-reference
+    const cbi = r._cbi || null;
+    const cbiHtml = cbi ? (
+      '<div class="lei-cbi-match">' +
+      '<div class="lei-cbi-match-label">CBI Register Match</div>' +
+      '<div class="lei-cbi-row"><span>Fund Name</span><span>' + cbi['Fund Name'] + '</span></div>' +
+      (cbi.ManCo ? '<div class="lei-cbi-row"><span>ManCo</span><span>' + cbi.ManCo + '</span></div>' : '') +
+      (cbi.Depositary ? '<div class="lei-cbi-row"><span>Depositary</span><span>' + cbi.Depositary + '</span></div>' : '') +
+      (cbi.Auth_Date ? '<div class="lei-cbi-row"><span>Auth Date</span><span>' + cbi.Auth_Date + '</span></div>' : '') +
+      '</div>'
+    ) : '';
+
+    return '<div class="lei-card">' +
+      '<div class="lei-card-header">' +
+        '<div>' +
+          '<div class="lei-card-title">' + name + '</div>' +
+          '<div class="lei-card-sub">' + [city, country].filter(Boolean).join(', ') + (category ? ' &middot; ' + category : '') + '</div>' +
+        '</div>' +
+        '<span class="lei-status-badge ' + status + '">' + status.toUpperCase() + '</span>' +
+      '</div>' +
+      '<div class="lei-card-body">' +
+        '<div class="lei-field"><label>LEI Code</label><span class="mono">' + lei + '</span></div>' +
+        '<div class="lei-field"><label>Legal Form</label><span>' + (legalForm || '—') + '</span></div>' +
+        '<div class="lei-field"><label>Managing OU</label><span>' + (managingOU || '—') + '</span></div>' +
+      '</div>' +
+      '<div class="lei-card-footer">' +
+        '<div class="lei-footer-item">Registered <strong>' + (registered || '—') + '</strong></div>' +
+        '<div class="lei-footer-item">Last updated <strong>' + (lastUpdate || '—') + '</strong></div>' +
+        '<div class="lei-footer-item">Next renewal <strong>' + (nextRenewal || '—') + '</strong></div>' +
+        '<div class="lei-footer-item" style="margin-left:auto"><a href="https://search.gleif.org/#/record/' + lei + '" target="_blank" style="color:var(--accent);font-size:11px">View on GLEIF &rarr;</a></div>' +
+      '</div>' +
+      cbiHtml +
+      '</div>';
+  }).join('');
+}
+
+function quickLEI(q) {
+  document.getElementById('leiQuery').value = q;
+  fetchLEI();
+}
+document.getElementById('leiQuery').addEventListener('keydown', e => { if(e.key==='Enter') fetchLEI(); });
+
+let leiLoaded = false;
+
+function switchTab(t) {
+  document.querySelectorAll('.tab').forEach((el,i) => el.classList.toggle('active',(i===0&&t==='cbi')||(i===1&&t==='lei')));
+  document.getElementById('tab-cbi').classList.toggle('active',t==='cbi');
+  document.getElementById('tab-lei').classList.toggle('active',t==='lei');
+  if (t === 'lei' && !leiLoaded) {
+    leiLoaded = true;
+    autoLoadRecentETFs();
+  }
+}
+
 init();
 </script>
 </body>
