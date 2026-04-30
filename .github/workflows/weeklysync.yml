@@ -30,6 +30,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install requests beautifulsoup4 pandas
+          pip install --upgrade pip
+          pip install requests beautifulsoup4 pandas pdfplumber
 
       - name: Run CBI sync
         run: python scripts/cbi_shadow_sync_v2.py
