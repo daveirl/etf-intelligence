@@ -1,7 +1,8 @@
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import io
+import subprocess
+import tempfile
 import re
 import os
 from datetime import datetime
@@ -10,11 +11,6 @@ DOWNLOADS_PAGE = "https://registers.centralbank.ie/DownloadsPage.aspx"
 TARGET_TEXT = "Authorised UCITS, European Communities (Undertakings for Collective Investment in Transferable Securities) Regulations 2011"
 DB_FILE = "data/cbi_shadow_db.csv"
 
-# Known address fragments to strip from ManCo/Trustee fields
-ADDRESS_NOISE = re.compile(
-    r"^\s*(\d+[\w\s,]+|floor|quay|road|street|place|dublin|d\d{2}|ireland|limited$)",
-    re.IGNORECASE
-)
 
 def standardize_date(date_str):
     for fmt in ("%d %b %Y", "%d-%b-%y", "%d %B %Y", "%d-%b-%Y", "%d %b %y"):
@@ -23,6 +19,7 @@ def standardize_date(date_str):
         except ValueError:
             continue
     return date_str.strip()
+
 
 def download_pdf():
     session = requests.Session()
@@ -49,53 +46,23 @@ def download_pdf():
     print("Downloaded " + str(round(len(pdf_res.content) / 1024)) + " KB")
     return pdf_res.content
 
-def looks_like_address(text):
-    """Return True if this text looks like an address line, not a company name."""
-    text = text.strip()
-    if not text:
-        return True
-    # Pure address indicators
-    if re.match(r"^\d+", text):           # starts with number = street number
-        return True
-    if re.match(r"^d\d{2}\s", text, re.I): # Dublin postcode e.g. D02 FT59
-        return True
-    keywords = ["floor", "quay", "road", "street", "place", "house", "court",
-                "square", "avenue", "lane", "dock", "park", " dublin", "ireland"]
-    lower = text.lower()
-    if any(k in lower for k in keywords):
-        return True
-    return False
 
 def looks_like_company(text):
-    """Return True if this text looks like a real company name."""
     text = text.strip()
     if len(text) < 5:
         return False
-    if looks_like_address(text):
-        return False
-    indicators = ["limited", "ltd", "plc", "s.a", "gmbh", "llp", "management",
-                  "asset", "fund", "trust", "capital", "investment", "services",
-                  "mellon", "state street", "northern trust", "deutsche", "bank",
-                  "global", "international", "europe", "ireland", "custody", "depositary"]
+    indicators = [
+        "limited", "ltd", "plc", "s.a", "gmbh", "management",
+        "asset", "trust", "capital", "investment", "services",
+        "mellon", "state street", "northern trust", "deutsche", "bank",
+        "global", "international", "europe", "ireland", "custody",
+        "depositary", "branch"
+    ]
     lower = text.lower()
     return any(i in lower for i in indicators)
 
-def parse_pdf_text(pdf_bytes):
-    """
-    Parse using pdftotext -layout output which preserves column positions.
-    Structure:
-      - Umbrella line (bold in PDF, but same text): "Umbrella Name   DATE   ManCo Name   Trustee Name"
-      - Sub-fund lines: "Sub-fund Name   date   [address junk]"
-      - Address lines: continuation rows with no fund name, just address text
-    
-    Strategy: detect umbrella lines by the presence of a company-looking string
-    in the ManCo column position. Track current ManCo/Trustee and apply to
-    all sub-funds until next umbrella.
-    """
-    import subprocess
-    import tempfile
 
-    # Write PDF to temp file and run pdftotext -layout
+def parse_pdf_text(pdf_bytes):
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(pdf_bytes)
         tmp_path = f.name
@@ -108,7 +75,8 @@ def parse_pdf_text(pdf_bytes):
     text = result.stdout
 
     date_pattern = re.compile(
-        r"\b(\d{1,2}[-\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s]\d{2,4}|\d{2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4})\b",
+        r"\b(\d{1,2}[-\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s]\d{2,4}"
+        r"|\d{2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4})\b",
         re.IGNORECASE
     )
 
@@ -118,8 +86,10 @@ def parse_pdf_text(pdf_bytes):
     seen = set()
 
     for line in text.split("\n"):
-        # Skip headers, footers, page markers
-        if re.search(r"Run Date:|Page \d+ of \d+|Name of UCITS|Date of|Authorisation|Management Company|Trustee", line):
+        if re.search(
+            r"Run Date:|Page \d+ of \d+|Name of UCITS|Date of|Authorisation|Management Company|Trustee",
+            line
+        ):
             continue
         if not line.strip():
             continue
@@ -131,56 +101,41 @@ def parse_pdf_text(pdf_bytes):
         date_pos = date_match.start()
         date_str = standardize_date(date_match.group(0))
         after_date = line[date_match.end():].strip()
-
-        # Fund name is everything before the date
         fund_name = line[:date_pos].strip()
 
         if not fund_name or len(fund_name) < 3:
             continue
 
-        # What comes after the date? Split by 2+ spaces to find columns
         after_parts = re.split(r"\s{2,}", after_date)
         after_parts = [p.strip() for p in after_parts if p.strip()]
 
-        # Detect umbrella line: after_date contains company-looking text
-        manco_candidate  = after_parts[0] if len(after_parts) > 0 else ""
+        manco_candidate = after_parts[0] if len(after_parts) > 0 else ""
         trustee_candidate = after_parts[1] if len(after_parts) > 1 else ""
 
         if looks_like_company(manco_candidate):
-            # This is an umbrella line — update current ManCo/Trustee
-            current_manco   = manco_candidate
+            current_manco = manco_candidate
             current_trustee = trustee_candidate if looks_like_company(trustee_candidate) else ""
 
-        # Record this fund (umbrella or sub-fund)
         if fund_name not in seen:
             seen.add(fund_name)
             records.append({
-                "Fund Name":  fund_name,
-                "ManCo":      current_manco,
+                "Fund Name": fund_name,
+                "ManCo": current_manco,
                 "Depositary": current_trustee,
-                "Auth_Date":  date_str,
+                "Auth_Date": date_str,
                 "First_Seen": datetime.now().strftime("%Y-%m-%d")
             })
 
     print("Extracted " + str(len(records)) + " unique funds")
     manco_pop = sum(1 for r in records if r["ManCo"])
-    dep_pop   = sum(1 for r in records if r["Depositary"])
+    dep_pop = sum(1 for r in records if r["Depositary"])
     print("ManCo populated:      " + str(manco_pop) + "/" + str(len(records)))
-    print("Depositary populated: " + str(dep_pop)   + "/" + str(len(records)))
-
-    # Print sample ETF rows
-    print("\nSample ETF rows:")
-    etf_rows = [r for r in records if "ETF" in r["Fund Name"]][:5]
-    for r in etf_rows:
-        print("  " + r["Fund Name"])
-        print("    ManCo:      " + r["ManCo"])
-        print("    Depositary: " + r["Depositary"])
-        print("    Date:       " + r["Auth_Date"])
+    print("Depositary populated: " + str(dep_pop) + "/" + str(len(records)))
 
     return records
 
+
 def run_sync():
-    # Preserve existing First_Seen dates
     first_seen_map = {}
     if os.path.exists(DB_FILE):
         existing_df = pd.read_csv(DB_FILE)
@@ -189,7 +144,7 @@ def run_sync():
                 first_seen_map[row["Fund Name"]] = row.get("First_Seen", "")
 
     pdf_bytes = download_pdf()
-    records   = parse_pdf_text(pdf_bytes)
+    records = parse_pdf_text(pdf_bytes)
 
     for r in records:
         if r["Fund Name"] in first_seen_map and first_seen_map[r["Fund Name"]]:
@@ -203,172 +158,6 @@ def run_sync():
     df.to_csv(DB_FILE, index=False)
     print("Saved " + str(len(df)) + " records to " + DB_FILE)
 
-if __name__ == "__main__":
-    run_sync()import requests
-from bs4 import BeautifulSoup
-import pdfplumber
-import pandas as pd
-import io
-import re
-import os
-from datetime import datetime
-
-DOWNLOADS_PAGE = "https://registers.centralbank.ie/DownloadsPage.aspx"
-TARGET_TEXT = "Authorised UCITS, European Communities (Undertakings for Collective Investment in Transferable Securities) Regulations 2011"
-DB_FILE = "data/cbi_shadow_db.csv"
-
-def standardize_date(date_str):
-    for fmt in ("%d %b %Y", "%d-%b-%y", "%d %B %Y", "%d-%b-%Y"):
-        try:
-            return datetime.strptime(date_str.strip(), fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return date_str.strip()
-
-def download_pdf():
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
-    res = session.get(DOWNLOADS_PAGE)
-    soup = BeautifulSoup(res.text, "html.parser")
-
-    payload = {
-        "__EVENTTARGET": "",
-        "__EVENTARGUMENT": "",
-        "__VIEWSTATE": soup.find("input", {"id": "__VIEWSTATE"})["value"],
-        "__VIEWSTATEGENERATOR": soup.find("input", {"id": "__VIEWSTATEGENERATOR"})["value"],
-        "__EVENTVALIDATION": soup.find("input", {"id": "__EVENTVALIDATION"})["value"]
-    }
-
-    for link in soup.find_all("a", href=True):
-        if TARGET_TEXT in link.text:
-            match = re.search(r"'(.*?)'", link["href"])
-            if match:
-                payload["__EVENTTARGET"] = match.group(1)
-                break
-
-    pdf_res = session.post(DOWNLOADS_PAGE, data=payload)
-    print("Downloaded " + str(round(len(pdf_res.content) / 1024)) + " KB")
-    return pdf_res.content
-
-def parse_pdf(pdf_bytes):
-    """
-    Extract Fund Name, ManCo, Depositary, Auth_Date from the CBI register PDF.
-    Tries structured table extraction first, falls back to text parsing.
-    """
-    records = []
-    date_pattern = re.compile(r"(\d{1,2}[- ](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[- ]\d{2,4})")
-
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        print("PDF has " + str(len(pdf.pages)) + " pages")
-
-        for page in pdf.pages:
-            tables = page.extract_tables()
-
-            if tables:
-                for table in tables:
-                    for row in table:
-                        if not row or not any(row):
-                            continue
-                        cells = [str(c).strip().replace("\n", " ") if c else "" for c in row]
-
-                        # Skip header rows
-                        if cells[0].lower() in ("fund name", "name", "ucits", ""):
-                            continue
-
-                        # Find the date cell
-                        date_str = ""
-                        date_col = -1
-                        for i, cell in enumerate(cells):
-                            m = date_pattern.search(cell)
-                            if m:
-                                date_str = m.group(1)
-                                date_col = i
-                                break
-
-                        if not date_str or not cells[0] or len(cells[0]) < 3:
-                            continue
-
-                        # Columns are typically: Fund Name | ManCo | Depositary | Auth Date
-                        fund_name  = cells[0]
-                        manco      = cells[1] if len(cells) > 1 and date_col != 1 else ""
-                        depositary = cells[2] if len(cells) > 2 and date_col not in (1, 2) else ""
-
-                        records.append({
-                            "Fund Name":  fund_name,
-                            "ManCo":      manco,
-                            "Depositary": depositary,
-                            "Auth_Date":  standardize_date(date_str),
-                            "First_Seen": datetime.now().strftime("%Y-%m-%d")
-                        })
-
-            else:
-                # Fallback: text line parsing (original approach)
-                text = page.extract_text()
-                if text:
-                    for line in text.split("\n"):
-                        m = date_pattern.search(line)
-                        if m:
-                            name = re.sub(r"\s+", " ", line[:m.start()]).strip().rstrip(",")
-                            if len(name) > 3:
-                                records.append({
-                                    "Fund Name":  name,
-                                    "ManCo":      "",
-                                    "Depositary": "",
-                                    "Auth_Date":  standardize_date(m.group(1)),
-                                    "First_Seen": datetime.now().strftime("%Y-%m-%d")
-                                })
-
-    # Deduplicate by Fund Name
-    seen = set()
-    deduped = []
-    for r in records:
-        if r["Fund Name"] not in seen:
-            seen.add(r["Fund Name"])
-            deduped.append(r)
-
-    print("Extracted " + str(len(deduped)) + " unique funds")
-    return deduped
-
-def run_sync():
-    # Load existing DB if present
-    if os.path.exists(DB_FILE):
-        existing_df = pd.read_csv(DB_FILE)
-        existing_names = set(existing_df["Fund Name"].values)
-    else:
-        existing_df = pd.DataFrame(columns=["Fund Name", "ManCo", "Depositary", "Auth_Date", "First_Seen"])
-        existing_names = set()
-
-    # Download and parse
-    pdf_bytes = download_pdf()
-    records   = parse_pdf(pdf_bytes)
-
-    # Split into new vs existing
-    new_records = [r for r in records if r["Fund Name"] not in existing_names]
-
-    # Merge: fresh parse replaces existing (so ManCo/Depositary gets populated)
-    # Build full dataframe from fresh parse, preserving First_Seen from existing where possible
-    first_seen_map = {}
-    if not existing_df.empty and "First_Seen" in existing_df.columns:
-        for _, row in existing_df.iterrows():
-            first_seen_map[row["Fund Name"]] = row.get("First_Seen", "")
-
-    for r in records:
-        if r["Fund Name"] in first_seen_map and first_seen_map[r["Fund Name"]]:
-            r["First_Seen"] = first_seen_map[r["Fund Name"]]
-
-    df = pd.DataFrame(records, columns=["Fund Name", "ManCo", "Depositary", "Auth_Date", "First_Seen"])
-    df["Auth_Date_DT"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
-    df = df.sort_values("Auth_Date_DT", ascending=False).drop(columns=["Auth_Date_DT"])
-
-    os.makedirs("data", exist_ok=True)
-    df.to_csv(DB_FILE, index=False)
-
-    etf_count = df["Fund Name"].str.contains("ETF", case=False, na=False).sum()
-    manco_populated = (df["ManCo"] != "").sum()
-    print("Total funds: " + str(len(df)))
-    print("ETFs: " + str(etf_count))
-    print("New this run: " + str(len(new_records)))
-    print("ManCo populated: " + str(manco_populated) + " / " + str(len(df)))
 
 if __name__ == "__main__":
     run_sync()
