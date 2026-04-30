@@ -39,6 +39,7 @@ select:focus,input:focus{border-color:var(--accent)}
 .bar-track{flex:1;background:var(--surface2);border-radius:3px;height:8px}
 .bar-fill{height:8px;border-radius:3px;transition:.4s}
 .bar-count{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;width:30px;text-align:right}
+.mono-date{font-family:'DM Mono',monospace;font-size:12px}
 .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .table-header{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
 .table-header h2{font-size:14px;font-weight:600}
@@ -254,7 +255,7 @@ function renderTable() {
     '<tr><td>' + r['Fund Name'] + (r.is_etf?' <span class="etf-badge">ETF</span>':'') + '</td>' +
     '<td>' + (r.ManCo||'') + '</td>' +
     '<td>' + (r.Depositary||'') + '</td>' +
-    '<td style="font-family:'DM Mono',monospace;font-size:12px">' + (r.Auth_Date||'') + '</td></tr>'
+    '<td class="mono-date">' + (r.Auth_Date||'') + '</td></tr>'
   ).join('');
 }
 
