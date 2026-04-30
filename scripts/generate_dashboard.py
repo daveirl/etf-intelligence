@@ -126,6 +126,7 @@ tr:hover td{background:var(--surface2)}
 .lei-footer-item strong{color:var(--text);font-weight:500}
 .lei-cbi-match{background:#f0b42911;border:1px solid #f0b42933;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:12px}
 .lei-cbi-match-label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin-bottom:4px}
+.lei-grid{display:flex;flex-direction:column;gap:2px}
 .lei-cbi-row{display:flex;justify-content:space-between;color:var(--muted);margin-top:2px}
 .lei-cbi-row span:last-child{color:var(--text)}
 </style>
@@ -218,15 +219,18 @@ tr:hover td{background:var(--surface2)}
   </div>
   <div class="quick-btns">
     <span style="font-size:12px;color:var(--muted);align-self:center;margin-right:4px">Quick:</span>
-    <button class="quick-btn" onclick="quickLEI('BlackRock Asset Management Ireland')">BlackRock</button>
-    <button class="quick-btn" onclick="quickLEI('iShares')">iShares</button>
-    <button class="quick-btn" onclick="quickLEI('Invesco')">Invesco</button>
-    <button class="quick-btn" onclick="quickLEI('Amundi')">Amundi</button>
-    <button class="quick-btn" onclick="quickLEI('WisdomTree')">WisdomTree</button>
-    <button class="quick-btn" onclick="quickLEI('VanEck')">VanEck</button>
-    <button class="quick-btn" onclick="quickLEI('Franklin Templeton')">Franklin Templeton</button>
-    <button class="quick-btn" onclick="quickLEI('State Street')">State Street / SPDR</button>
-    <button class="quick-btn" onclick="quickLEI('DWS')">Xtrackers / DWS</button>
+    <button class="quick-btn" onclick="quickLEI('BlackRock Asset Management Ireland')">BlackRock IE</button>
+    <button class="quick-btn" onclick="quickLEI('Invesco Investment Management Limited')">Invesco IE</button>
+    <button class="quick-btn" onclick="quickLEI('Amundi Asset Management')">Amundi FR</button>
+    <button class="quick-btn" onclick="quickLEI('WisdomTree Management Limited')">WisdomTree IE</button>
+    <button class="quick-btn" onclick="quickLEI('VanEck Asset Management')">VanEck NL</button>
+    <button class="quick-btn" onclick="quickLEI('Franklin Templeton International Services')">Franklin Templeton LU</button>
+    <button class="quick-btn" onclick="quickLEI('State Street Global Advisors Europe')">State Street IE</button>
+    <button class="quick-btn" onclick="quickLEI('DWS Investment')">DWS DE</button>
+    <button class="quick-btn" onclick="quickLEI('JPMorgan Asset Management Europe')">JPMorgan LU</button>
+    <button class="quick-btn" onclick="quickLEI('PIMCO Europe')">PIMCO IE</button>
+    <button class="quick-btn" onclick="quickLEI('Fidelity Investment Management Ireland')">Fidelity IE</button>
+    <button class="quick-btn" onclick="quickLEI('HANetf Limited')">HANetf IE</button>
   </div>
   <div id="leiLoading" style="display:none;padding:20px 0">
     <div style="display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px">
@@ -337,15 +341,19 @@ function buildCharts() {
   ).join('');
 }
 
+const EU_EEA = new Set(['IE','LU','DE','FR','NL','SE','DK','AT','BE','FI','IT','ES','PT',
+  'PL','CZ','HU','SK','RO','BG','HR','SI','EE','LV','LT','CY','MT','GR','NO','IS','LI','CH']);
+
 async function fetchLEI() {
   const q = document.getElementById('leiQuery').value.trim();
   if (!q) return;
   setLeiLoading(true);
   document.getElementById('leiSectionLabel').textContent = 'Search results for "' + q + '"';
   try {
-    const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(q) + '&page[size]=20';
+    const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(q) + '&page[size]=50';
     const data = await (await fetch(url)).json();
-    renderLEI(data.data || [], data.meta?.total || 0);
+    const euOnly = (data.data || []).filter(r => EU_EEA.has((r.attributes?.entity?.legalAddress?.country || '')));
+    renderLEI(euOnly, euOnly.length);
   } catch(e) {
     document.getElementById('leiResults').innerHTML = '<p style="color:#e05c2c">Error: '+e.message+'</p>';
   } finally {
@@ -361,12 +369,12 @@ async function autoLoadRecentETFs() {
   const results = [];
   for (const fund of recentETFs) {
     try {
-      const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=1';
+      const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=5';
       const data = await (await fetch(url)).json();
-      if (data.data && data.data.length > 0) {
-        // Attach our CBI register data to the result for cross-referencing
-        data.data[0]._cbi = fund;
-        results.push(data.data[0]);
+      const euHit = (data.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
+      if (euHit) {
+        euHit._cbi = fund;
+        results.push(euHit);
       }
     } catch(e) {
       // Skip individual failures silently
@@ -383,60 +391,84 @@ function setLeiLoading(on) {
 
 function renderLEI(records, total) {
   if (!records.length) {
-    document.getElementById('leiResults').innerHTML = '<p style="color:var(--muted);padding:20px 0">No results found.</p>';
+    document.getElementById('leiResults').innerHTML = '<p style="color:var(--muted);padding:20px 0">No EU/EEA results found.</p>';
     return;
   }
+  document.getElementById('leiSectionLabel').textContent = (total || records.length) + ' EU/EEA result(s)';
   document.getElementById('leiResults').innerHTML = records.map(r => {
     const attr   = r.attributes || {};
     const entity = attr.entity || {};
     const reg    = attr.registration || {};
-    const addr   = entity.legalAddress || {};
+    const laddr  = entity.legalAddress || {};
+    const raddr  = entity.registeredAddress || {};
 
     const name        = entity.legalName?.value || r.id;
+    const otherNames  = (entity.otherNames || []).map(n => n.value).filter(Boolean);
     const lei         = r.id || '';
-    const country     = addr.country || '';
-    const city        = addr.city || '';
+    const country     = laddr.country || '';
+    const city        = laddr.city || '';
+    const addrLine    = [laddr.addressLines?.[0], laddr.postalCode, city, country].filter(Boolean).join(', ');
     const legalForm   = entity.legalForm?.id || '';
     const category    = entity.entityCategory || '';
+    const subCategory = entity.entitySubCategory || '';
     const status      = (reg.status || '').toLowerCase() === 'issued' ? 'issued' : 'lapsed';
     const registered  = (reg.initialRegistrationDate || '').substring(0, 10);
     const lastUpdate  = (reg.lastUpdateDate || '').substring(0, 10);
     const nextRenewal = (reg.nextRenewalDate || '').substring(0, 10);
     const managingOU  = attr.managingOU?.name || '';
+    const jurisdiction= entity.jurisdiction || '';
+
+    // Country flag emoji
+    const flag = country.length === 2
+      ? String.fromCodePoint(...[...country.toUpperCase()].map(c => c.charCodeAt(0) + 127397))
+      : '';
 
     // CBI register cross-reference
     const cbi = r._cbi || null;
     const cbiHtml = cbi ? (
       '<div class="lei-cbi-match">' +
-      '<div class="lei-cbi-match-label">CBI Register Match</div>' +
+      '<div class="lei-cbi-match-label">&#x2713; CBI Register Match</div>' +
+      '<div class="lei-grid">' +
       '<div class="lei-cbi-row"><span>Fund Name</span><span>' + cbi['Fund Name'] + '</span></div>' +
       (cbi.ManCo ? '<div class="lei-cbi-row"><span>ManCo</span><span>' + cbi.ManCo + '</span></div>' : '') +
       (cbi.Depositary ? '<div class="lei-cbi-row"><span>Depositary</span><span>' + cbi.Depositary + '</span></div>' : '') +
       (cbi.Auth_Date ? '<div class="lei-cbi-row"><span>Auth Date</span><span>' + cbi.Auth_Date + '</span></div>' : '') +
-      '</div>'
+      '</div></div>'
     ) : '';
 
     return '<div class="lei-card">' +
+      // Header: name + status
       '<div class="lei-card-header">' +
-        '<div>' +
-          '<div class="lei-card-title">' + name + '</div>' +
-          '<div class="lei-card-sub">' + [city, country].filter(Boolean).join(', ') + (category ? ' &middot; ' + category : '') + '</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="lei-card-title">' + flag + ' ' + name + '</div>' +
+          (otherNames.length ? '<div style="font-size:11px;color:var(--muted);margin-top:2px">Also known as: ' + otherNames.slice(0,2).join(', ') + '</div>' : '') +
+          '<div class="lei-card-sub">' + (addrLine || [city,country].filter(Boolean).join(', ')) +
+            (category ? ' &nbsp;&middot;&nbsp; ' + category : '') +
+            (subCategory ? ' / ' + subCategory : '') +
+          '</div>' +
         '</div>' +
         '<span class="lei-status-badge ' + status + '">' + status.toUpperCase() + '</span>' +
       '</div>' +
+      // Body: key fields in grid
       '<div class="lei-card-body">' +
         '<div class="lei-field"><label>LEI Code</label><span class="mono">' + lei + '</span></div>' +
+        '<div class="lei-field"><label>Jurisdiction</label><span>' + (jurisdiction || country || '—') + '</span></div>' +
         '<div class="lei-field"><label>Legal Form</label><span>' + (legalForm || '—') + '</span></div>' +
+        '<div class="lei-field"><label>Entity Category</label><span>' + (category || '—') + '</span></div>' +
         '<div class="lei-field"><label>Managing OU</label><span>' + (managingOU || '—') + '</span></div>' +
+        '<div class="lei-field"><label>Registered Address</label><span style="font-size:11px">' + ([raddr.addressLines?.[0], raddr.city, raddr.country].filter(Boolean).join(', ') || addrLine || '—') + '</span></div>' +
       '</div>' +
+      // Footer: dates + GLEIF link
       '<div class="lei-card-footer">' +
         '<div class="lei-footer-item">Registered <strong>' + (registered || '—') + '</strong></div>' +
         '<div class="lei-footer-item">Last updated <strong>' + (lastUpdate || '—') + '</strong></div>' +
         '<div class="lei-footer-item">Next renewal <strong>' + (nextRenewal || '—') + '</strong></div>' +
-        '<div class="lei-footer-item" style="margin-left:auto"><a href="https://search.gleif.org/#/record/' + lei + '" target="_blank" style="color:var(--accent);font-size:11px">View on GLEIF &rarr;</a></div>' +
+        '<div class="lei-footer-item" style="margin-left:auto">' +
+          '<a href="https://search.gleif.org/#/record/' + lei + '" target="_blank" style="color:var(--accent);font-size:11px">View on GLEIF &rarr;</a>' +
+        '</div>' +
       '</div>' +
       cbiHtml +
-      '</div>';
+    '</div>';
   }).join('');
 }
 
