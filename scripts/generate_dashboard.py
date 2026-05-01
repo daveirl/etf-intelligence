@@ -396,24 +396,40 @@ async function autoLoadRecentETFs() {
   setLeiLoading(true);
   document.getElementById('leiSectionLabel').textContent = 'Loading 10 most recently authorised UCITS ETFs…';
 
-  // Filter to funds with "UCITS ETF" in the name, most recent first
+  // Get last 10 funds with "UCITS ETF" in name, sorted most recent first
   const recentETFs = ALL_DATA
     .filter(r => r['Fund Name'] && r['Fund Name'].toUpperCase().includes('UCITS ETF'))
     .slice(0, 10);
 
   const results = [];
   for (const fund of recentETFs) {
+    // Start with a synthetic record from CBI data so all 10 always show
+    const syntheticRecord = {
+      id: null,
+      _cbi: fund,
+      _synthetic: true,
+      attributes: {
+        entity: {
+          legalName: fund['Fund Name'],
+          legalAddress: { country: 'IE', city: '' },
+          entityCategory: 'FUND',
+          jurisdiction: 'IE'
+        },
+        registration: { status: 'ISSUED' }
+      }
+    };
+
     try {
-      // Try direct name search first
+      // Try exact name search
       const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=5';
       const data = await (await fetch(url)).json();
       let hit = (data.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
 
-      // If no exact match, try truncating to umbrella name (everything before last dash or bracket)
+      // Fallback: strip suffix after last dash/bracket and retry
       if (!hit) {
         const shortName = fund['Fund Name']
-          .replace(/\s*[-–]\s*\w.*$/, '')   // strip sub-fund suffix after dash
-          .replace(/\s*\(.*\)\s*$/, '')      // strip trailing parenthetical
+          .replace(/\s+[A-Z]{3}\s+(Acc|Dist|Hdg|H).*$/i, '')
+          .replace(/\s*\(.*\)\s*$/, '')
           .trim();
         if (shortName && shortName !== fund['Fund Name']) {
           const url2 = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(shortName) + '&page[size]=5';
@@ -425,13 +441,16 @@ async function autoLoadRecentETFs() {
       if (hit) {
         hit._cbi = fund;
         results.push(hit);
+      } else {
+        // No GLEIF match — show CBI data only
+        results.push(syntheticRecord);
       }
     } catch(e) {
-      // Skip individual failures silently
+      results.push(syntheticRecord);
     }
   }
 
-  document.getElementById('leiSectionLabel').textContent = '10 most recently authorised UCITS ETFs' + (results.length < recentETFs.length ? ' (' + results.length + ' matched in GLEIF)' : '');
+  document.getElementById('leiSectionLabel').textContent = '10 most recently authorised UCITS ETFs';
   renderLEI(results, results.length);
   setLeiLoading(false);
 }
@@ -454,9 +473,11 @@ function renderLEI(records, total) {
     const laddr  = entity.legalAddress || {};
     const raddr  = entity.registeredAddress || {};
 
-    // Name: GLEIF returns legalName as {value, language} object
-    const legalNameObj = entity.legalName || {};
-    const name        = legalNameObj.value || legalNameObj || r.id || 'Unknown';
+    // Name: GLEIF returns legalName as {value, language} object OR plain string
+    const legalNameRaw = entity.legalName;
+    const name = (typeof legalNameRaw === 'string')
+      ? legalNameRaw
+      : (legalNameRaw?.value || r.id || 'Unknown');
     const otherNames  = (entity.otherNames || []).map(n => n.value || n).filter(Boolean);
     const lei         = r.id || '';
     const country     = laddr.country || '';
@@ -489,6 +510,28 @@ function renderLEI(records, total) {
       (cbi.Auth_Date ? '<div class="lei-cbi-row"><span>Auth Date</span><span>' + cbi.Auth_Date + '</span></div>' : '') +
       '</div></div>'
     ) : '';
+
+    // For synthetic (CBI-only) records, show a simplified card
+    if (r._synthetic) {
+      const cbi = r._cbi;
+      return '<div class="lei-card" style="opacity:0.85">' +
+        '<div class="lei-card-header">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div class="lei-card-title">🇮🇪 ' + cbi['Fund Name'] + '</div>' +
+            '<div class="lei-card-sub">CBI register only &nbsp;&middot;&nbsp; No GLEIF match found</div>' +
+          '</div>' +
+          '<span class="lei-status-badge issued">ISSUED</span>' +
+        '</div>' +
+        '<div class="lei-cbi-match" style="margin-top:8px">' +
+          '<div class="lei-cbi-match-label">CBI Register</div>' +
+          '<div class="lei-grid">' +
+          (cbi.ManCo ? '<div class="lei-cbi-row"><span>ManCo</span><span>' + cbi.ManCo + '</span></div>' : '') +
+          (cbi.Depositary ? '<div class="lei-cbi-row"><span>Depositary</span><span>' + cbi.Depositary + '</span></div>' : '') +
+          (cbi.Auth_Date ? '<div class="lei-cbi-row"><span>Auth Date</span><span>' + cbi.Auth_Date + '</span></div>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
 
     return '<div class="lei-card">' +
       // Header: name + status
