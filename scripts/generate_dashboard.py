@@ -1,515 +1,538 @@
 """
 generate_dashboard.py
 ─────────────────────
-Reads data/cbi_shadow_db.csv and writes docs/index.html.
-No guessing — uses ManCo and Depositary exactly as parsed from the CBI PDF.
+Reads data/cbi_shadow_db.csv + data/icav_db.csv and writes docs/index.html.
+Run locally or via GitHub Actions after cbi_shadow_sync_v2.py and icav_sync.py.
 """
 
 import pandas as pd
 import json
 import os
-from datetime import date
+from datetime import datetime
 
-CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "cbi_shadow_db.csv")
-HTML_OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "index.html")
-TODAY    = date.today().isoformat()
+SCRIPT_DIR = os.path.dirname(__file__)
+CSV_PATH   = os.path.join(SCRIPT_DIR, '..', 'data', 'cbi_shadow_db.csv')
+ICAV_PATH  = os.path.join(SCRIPT_DIR, '..', 'data', 'icav_db.csv')
+HTML_OUT   = os.path.join(SCRIPT_DIR, '..', 'docs', 'index.html')
 
-def build_html(df):
-    df["is_etf"] = df["Fund Name"].str.contains("ETF", case=False, na=False)
-    df["Auth_Date"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
-    now = pd.Timestamp(TODAY)
+EU_EEA = {'IE','LU','DE','FR','NL','SE','DK','AT','BE','FI','IT','ES','PT',
+           'PL','CZ','HU','SK','RO','BG','HR','SI','EE','LV','LT','CY','MT','GR','NO','IS','LI','CH'}
 
-    df_etf   = df[df["is_etf"]]
-    total    = len(df)
-    total_etf = len(df_etf)
-    new_30   = len(df_etf[df_etf["Auth_Date"] >= now - pd.Timedelta(days=30)])
-    new_90   = len(df_etf[df_etf["Auth_Date"] >= now - pd.Timedelta(days=90)])
-    ytd      = len(df_etf[df_etf["Auth_Date"].dt.year == now.year])
 
-    df["Auth_Date"] = df["Auth_Date"].dt.strftime("%Y-%m-%d").fillna("")
-    df["ManCo"]      = df.get("ManCo", pd.Series([""] * len(df))).fillna("")
-    df["Depositary"] = df.get("Depositary", pd.Series([""] * len(df))).fillna("")
+def build_html(df, icav_df):
+    records      = df.fillna('').to_dict(orient='records')
+    icav_records = icav_df.fillna('').to_dict(orient='records')
+    data_json    = json.dumps(records,      separators=(',', ':'))
+    icav_json    = json.dumps(icav_records, separators=(',', ':'))
 
-    records = df[["Fund Name", "ManCo", "Depositary", "Auth_Date", "is_etf"]].fillna("").to_dict(orient="records")
-    data_js = json.dumps(records, separators=(",", ":"))
+    generated_at = datetime.now().strftime('%Y-%m-%d %H:%M UTC')
+    total        = len(df)
+    etf_count    = int(df['Fund Name'].str.contains('ETF', case=False, na=False).sum())
+    icav_total   = len(icav_df)
+    icav_etf     = int(icav_df['ETF Related'].eq('Yes').sum()) if 'ETF Related' in icav_df.columns else 0
+    icav_liq     = int(icav_df['In Liquidation'].eq('Yes').sum()) if 'In Liquidation' in icav_df.columns else 0
 
-    # Top ManCos by ETF count
-    manco_counts = df_etf[df_etf["ManCo"] != ""].groupby("ManCo").size().sort_values(ascending=False).head(8)
-    manco_labels = json.dumps(list(manco_counts.index))
-    manco_values = json.dumps(list(manco_counts.values.tolist()))
-
-    # Top depositaries
-    dep_counts = df_etf[df_etf["Depositary"] != ""].groupby("Depositary").size().sort_values(ascending=False).head(6)
-    dep_labels = json.dumps(list(dep_counts.index))
-    dep_values = json.dumps(list(dep_counts.values.tolist()))
-
-    return """<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ETF Intelligence — CBI Register</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETF Intelligence</title>
 <style>
-:root{--bg:#0d1117;--surface:#161b22;--surface2:#1c2330;--border:#30363d;--accent:#f0b429;--green:#3fb950;--text:#e6edf3;--muted:#8b949e}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;min-height:100vh}
-.header{background:var(--surface);border-bottom:1px solid var(--border);padding:0 32px;display:flex;align-items:center;justify-content:space-between;height:60px;position:sticky;top:0;z-index:100}
-.logo{font-family:'DM Serif Display',serif;font-size:20px;display:flex;align-items:center;gap:10px}
-.logo-dot{width:8px;height:8px;background:var(--accent);border-radius:50%}
-.logo span{color:var(--accent)}
-.header-meta{font-size:12px;color:var(--muted)}
-.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 32px}
-.tab{padding:14px 20px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;transition:.2s}
-.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-.tab-content{display:none}.tab-content.active{display:block}
-.layout{display:grid;grid-template-columns:260px 1fr;min-height:calc(100vh - 120px)}
-.sidebar{background:var(--surface);border-right:1px solid var(--border);padding:20px;display:flex;flex-direction:column;gap:16px}
-.sidebar h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
-.filter-group{display:flex;flex-direction:column;gap:6px}
-.filter-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;text-align:left;transition:.15s}
-.filter-btn:hover,.filter-btn.active{border-color:var(--accent);color:var(--accent)}
-select,input[type=date],input[type=text]{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font-size:12px;width:100%;outline:none}
-select:focus,input:focus{border-color:var(--accent)}
-.main{padding:24px;overflow:auto}
-.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
-.stat{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
-.stat-val{font-size:22px;font-weight:600;color:var(--accent);font-family:'DM Mono',monospace}
-.stat-lbl{font-size:11px;color:var(--muted);margin-top:4px}
-.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
-.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
-.chart-card h3{font-size:13px;font-weight:600;margin-bottom:14px}
-.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:7px}
-.bar-label{font-size:11px;color:var(--muted);width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
-.bar-track{flex:1;background:var(--surface2);border-radius:3px;height:8px}
-.bar-fill{height:8px;border-radius:3px;transition:.4s}
-.bar-count{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;width:30px;text-align:right}
-.mono-date{font-family:'DM Mono',monospace;font-size:12px}
-.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
-.table-header{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
-.table-header h2{font-size:14px;font-weight:600}
-.export-btn{background:var(--accent);color:#000;border:none;padding:6px 14px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600}
-table{width:100%;border-collapse:collapse}
-th{background:var(--surface2);padding:10px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-td{padding:9px 14px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle}
-tr:last-child td{border-bottom:none}
-tr:hover td{background:var(--surface2)}
-.etf-badge{background:#f0b42922;border:1px solid #f0b42966;color:var(--accent);font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;white-space:nowrap}
-.pagination{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
-.page-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:5px;cursor:pointer;font-size:12px}
-.page-btn:hover{border-color:var(--accent)}
-.page-info{font-size:12px;color:var(--muted)}
-.lei-wrap{padding:32px}
-.search-row{display:flex;gap:10px;margin-bottom:16px}
-.search-input{flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;font-size:14px;outline:none}
-.search-input:focus{border-color:var(--accent)}
-.search-btn{background:var(--accent);color:#000;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px}
-.quick-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;align-items:center}
-.quick-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:20px;cursor:pointer;font-size:12px}
-.quick-btn:hover{border-color:var(--accent);color:var(--accent)}
-.spinner{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
-@keyframes spin{to{transform:rotate(360deg)}}
-.lei-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:12px;transition:.15s}
-.lei-card:hover{border-color:var(--accent)}
-.lei-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
-.lei-card-title{font-weight:700;font-size:16px;line-height:1.3;color:var(--text)}
-.lei-card-sub{font-size:12px;color:var(--muted);margin-top:3px}
-.lei-status-badge{font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
-.issued{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
-.lapsed{background:#e05c2c22;color:#e05c2c;border:1px solid #e05c2c44}
-.lei-card-body{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
-.lei-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:3px}
-.lei-field span{font-size:12px;color:var(--text)}
-.lei-field .mono{font-family:'DM Mono',monospace;font-size:11px;color:var(--accent)}
-.lei-card-footer{display:flex;align-items:center;gap:20px;padding-top:12px;border-top:1px solid var(--border)}
-.lei-footer-item{font-size:11px;color:var(--muted)}
-.lei-footer-item strong{color:var(--text);font-weight:500}
-.lei-cbi-match{background:#f0b42911;border:1px solid #f0b42933;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:12px}
-.lei-cbi-match-label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin-bottom:4px}
-.lei-grid{display:flex;flex-direction:column;gap:2px}
-.lei-cbi-row{display:flex;justify-content:space-between;color:var(--muted);margin-top:2px}
-.lei-cbi-row span:last-child{color:var(--text)}
+:root {{
+  --bg:#09090b; --s1:#111113; --s2:#18181b; --s3:#27272a;
+  --border:#3f3f46; --accent:#eab308; --blue:#3b82f6;
+  --green:#22c55e; --red:#ef4444; --text:#fafafa; --muted:#71717a;
+}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden}}
+.topbar{{background:var(--s1);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;height:52px;flex-shrink:0;gap:16px}}
+.brand{{font-weight:800;font-size:16px;letter-spacing:-.5px;display:flex;align-items:center;gap:8px}}
+.brand-dot{{width:7px;height:7px;background:var(--accent);border-radius:50%}}
+.brand em{{color:var(--accent);font-style:normal}}
+.tabs{{display:flex;gap:2px}}
+.tab{{padding:6px 16px;border-radius:5px;cursor:pointer;font-weight:600;font-size:12px;color:var(--muted);border:1px solid transparent;background:none;transition:all .15s}}
+.tab:hover{{color:var(--text);background:var(--s2)}}
+.tab.active{{color:var(--accent);background:#eab30815;border-color:#eab30840}}
+.meta{{margin-left:auto;font-size:11px;color:var(--muted)}}
+.main{{display:flex;flex:1;overflow:hidden}}
+/* ── CBI sidebar ── */
+.sidebar{{width:280px;flex-shrink:0;background:var(--s1);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px;gap:12px;overflow-y:auto}}
+.content{{flex:1;overflow:hidden;display:flex;flex-direction:column}}
+.search-box{{background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text);width:100%;outline:none}}
+.search-box:focus{{border-color:var(--accent)}}
+.filter-label{{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}}
+select{{background:var(--s2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:12px;width:100%;outline:none;cursor:pointer}}
+.stats-row{{display:flex;gap:8px}}
+.stat-card{{flex:1;background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}}
+.stat-val{{font-size:20px;font-weight:700;color:var(--accent)}}
+.stat-lbl{{font-size:10px;color:var(--muted);margin-top:2px}}
+.table-wrap{{flex:1;overflow:auto}}
+table{{width:100%;border-collapse:collapse}}
+th{{background:var(--s1);border-bottom:1px solid var(--border);padding:9px 14px;text-align:left;font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;cursor:pointer;white-space:nowrap;position:sticky;top:0;z-index:1}}
+th:hover{{color:var(--text)}}
+td{{padding:8px 14px;border-bottom:1px solid #27272a55;vertical-align:middle}}
+tr:hover td{{background:var(--s2)}}
+.badge{{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:.3px}}
+.badge-etf{{background:#eab30820;color:var(--accent);border:1px solid #eab30840}}
+.badge-other{{background:#3f3f4620;color:var(--muted);border:1px solid #3f3f46}}
+.badge-liq{{background:#ef444420;color:var(--red);border:1px solid #ef444440}}
+.badge-new{{background:#22c55e20;color:var(--green);border:1px solid #22c55e40}}
+.status-bar{{padding:8px 16px;background:var(--s1);border-top:1px solid var(--border);font-size:11px;color:var(--muted);flex-shrink:0}}
+/* ── LEI tab ── */
+#leiPane{{display:none;flex:1;overflow:hidden;flex-direction:column}}
+.lei-toolbar{{display:flex;align-items:center;gap:10px;padding:16px;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}}
+.lei-search-box{{background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text);width:280px;outline:none}}
+.lei-search-box:focus{{border-color:var(--accent)}}
+.lei-btn{{background:var(--accent);color:#000;border:none;border-radius:6px;padding:8px 16px;font-weight:700;font-size:12px;cursor:pointer}}
+.quick-btns{{display:flex;flex-wrap:wrap;gap:6px;align-items:center}}
+.quick-btn{{background:var(--s2);border:1px solid var(--border);border-radius:5px;color:var(--muted);padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600}}
+.quick-btn:hover{{color:var(--text);border-color:var(--accent)}}
+.lei-results{{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}}
+.lei-section-label{{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}}
+.lei-card{{background:var(--s2);border:1px solid var(--border);border-radius:10px;overflow:hidden}}
+.lei-card-header{{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;gap:12px}}
+.lei-card-title{{font-weight:700;font-size:15px;color:var(--text)}}
+.lei-card-sub{{font-size:11px;color:var(--muted);margin-top:3px}}
+.lei-status-badge{{padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.3px;white-space:nowrap}}
+.lei-status-badge.issued{{background:#22c55e20;color:var(--green);border:1px solid #22c55e40}}
+.lei-status-badge.lapsed{{background:#ef444420;color:#ef4444;border:1px solid #ef444440}}
+.lei-card-body{{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-top:1px solid var(--border)}}
+.lei-field{{padding:10px 16px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)}}
+.lei-field:nth-child(3n){{border-right:none}}
+.lei-field label{{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px}}
+.lei-field span{{font-size:12px;color:var(--text)}}
+.mono{{font-family:monospace;font-size:11px;letter-spacing:.5px}}
+.lei-card-footer{{display:flex;gap:16px;padding:10px 16px;background:var(--s1);border-top:1px solid var(--border);flex-wrap:wrap}}
+.lei-footer-item{{font-size:11px;color:var(--muted)}}
+.lei-footer-item strong{{color:var(--text)}}
+.lei-cbi-match{{background:#eab30810;border-top:1px solid #eab30830;padding:10px 16px}}
+.lei-cbi-row{{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}}
+/* ── ICAV tab ── */
+#icavPane{{display:none;flex:1;overflow:hidden;flex-direction:column}}
+.icav-layout{{display:flex;flex:1;overflow:hidden}}
+.icav-sidebar{{width:280px;flex-shrink:0;background:var(--s1);border-right:1px solid var(--border);padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto}}
+.icav-content{{flex:1;overflow:hidden;display:flex;flex-direction:column}}
+.icav-stats{{display:flex;gap:8px;padding:12px 16px;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0}}
+.icav-stat{{flex:1;background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;text-align:center}}
+.icav-stat-val{{font-size:18px;font-weight:700;color:var(--accent)}}
+.icav-stat-lbl{{font-size:10px;color:var(--muted);margin-top:1px}}
 </style>
 </head>
 <body>
-<header class="header">
-  <div class="logo"><div class="logo-dot"></div>ETF <span>Intelligence</span></div>
-  <div class="header-meta">CBI Register &middot; Updated """ + TODAY + """</div>
-</header>
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('cbi')">CBI Register</div>
-  <div class="tab" onclick="switchTab('lei')">LEI Lookup</div>
+
+<div class="topbar">
+  <div class="brand"><div class="brand-dot"></div><em>ETF</em> Intelligence</div>
+  <div class="tabs">
+    <button class="tab active" id="tabCbi"  onclick="switchTab('cbi')">CBI Register</button>
+    <button class="tab"        id="tabLei"  onclick="switchTab('lei')">LEI Lookup</button>
+    <button class="tab"        id="tabIcav" onclick="switchTab('icav')">ICAV Register</button>
+  </div>
+  <div class="meta">Generated {generated_at} &nbsp;·&nbsp; {total:,} UCITS funds &nbsp;·&nbsp; {etf_count:,} ETFs &nbsp;·&nbsp; {icav_total:,} ICAVs</div>
 </div>
 
-<div id="tab-cbi" class="tab-content active">
-<div class="layout">
-  <aside class="sidebar">
-    <div class="filter-group">
-      <h3>Fund Type</h3>
-      <button class="filter-btn active" onclick="setFilter('all',this)">All Funds</button>
-      <button class="filter-btn" onclick="setFilter('etf',this)">ETFs Only</button>
-      <button class="filter-btn" onclick="setFilter('new30',this)">New (30d)</button>
-      <button class="filter-btn" onclick="setFilter('new90',this)">New (90d)</button>
-    </div>
-    <div class="filter-group">
-      <h3>Auth Date From</h3>
-      <input type="date" id="dFrom" onchange="applyFilters()">
-    </div>
-    <div class="filter-group">
-      <h3>Auth Date To</h3>
-      <input type="date" id="dTo" onchange="applyFilters()">
-    </div>
-    <div class="filter-group">
-      <h3>Management Co.</h3>
-      <select id="selManco" onchange="applyFilters()"><option value="">All ManCos</option></select>
-    </div>
-    <div class="filter-group">
-      <h3>Depositary</h3>
-      <select id="selDep" onchange="applyFilters()"><option value="">All Depositaries</option></select>
-    </div>
-    <div class="filter-group">
-      <h3>Search</h3>
-      <input type="text" id="searchBox" placeholder="Fund name&hellip;" oninput="applyFilters()">
-    </div>
-  </aside>
-  <main class="main">
-    <div class="stats-row">
-      <div class="stat"><div class="stat-val">""" + str(total) + """</div><div class="stat-lbl">Total Funds</div></div>
-      <div class="stat"><div class="stat-val">""" + str(total_etf) + """</div><div class="stat-lbl">ETFs</div></div>
-      <div class="stat"><div class="stat-val">""" + str(new_30) + """</div><div class="stat-lbl">New ETFs (30d)</div></div>
-      <div class="stat"><div class="stat-val">""" + str(new_90) + """</div><div class="stat-lbl">New ETFs (90d)</div></div>
-      <div class="stat"><div class="stat-val">""" + str(ytd) + """</div><div class="stat-lbl">ETFs YTD """ + str(now.year) + """</div></div>
-    </div>
-    <div class="charts-row">
-      <div class="chart-card"><h3>Top Management Companies (ETFs)</h3><div id="mancoChart"></div></div>
-      <div class="chart-card"><h3>Depositary Market Share (ETFs)</h3><div id="depChart"></div></div>
-    </div>
-    <div class="table-wrap">
-      <div class="table-header">
-        <h2>Fund Register <span id="rowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
-        <button class="export-btn" onclick="exportCSV()">Export CSV</button>
+<div class="main">
+
+  <!-- ════════════════ CBI PANE ════════════════ -->
+  <div id="cbiPane" style="display:flex;flex:1;overflow:hidden">
+    <div class="sidebar">
+      <input class="search-box" id="searchBox" placeholder="Search funds…" oninput="applyFilters()">
+      <div>
+        <div class="filter-label" style="margin-bottom:6px">Type</div>
+        <select id="filterType" onchange="applyFilters()">
+          <option value="all">All funds</option>
+          <option value="etf">ETFs only</option>
+          <option value="other">Non-ETF only</option>
+        </select>
       </div>
-      <div style="overflow-x:auto">
-        <table>
-          <thead><tr>
-            <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
-          </tr></thead>
+      <div>
+        <div class="filter-label" style="margin-bottom:6px">ManCo</div>
+        <select id="filterManco" onchange="applyFilters()"><option value="">All ManCos</option></select>
+      </div>
+      <div>
+        <div class="filter-label" style="margin-bottom:6px">Depositary</div>
+        <select id="filterDep" onchange="applyFilters()"><option value="">All Depositaries</option></select>
+      </div>
+      <div>
+        <div class="filter-label" style="margin-bottom:6px">Year authorised</div>
+        <select id="filterYear" onchange="applyFilters()"><option value="">All years</option></select>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-val" id="statVisible">—</div><div class="stat-lbl">Shown</div></div>
+        <div class="stat-card"><div class="stat-val" id="statEtf">—</div><div class="stat-lbl">ETFs</div></div>
+      </div>
+    </div>
+    <div class="content">
+      <div class="table-wrap">
+        <table id="mainTable">
+          <thead>
+            <tr>
+              <th onclick="sortBy('Fund Name')">Fund Name ↕</th>
+              <th onclick="sortBy('ManCo')">ManCo ↕</th>
+              <th onclick="sortBy('Depositary')">Depositary ↕</th>
+              <th onclick="sortBy('Auth_Date')">Auth Date ↕</th>
+              <th onclick="sortBy('First_Seen')">First Seen ↕</th>
+              <th>Type</th>
+            </tr>
+          </thead>
           <tbody id="tableBody"></tbody>
         </table>
       </div>
-      <div class="pagination">
-        <button class="page-btn" onclick="changePage(-1)">&larr; Prev</button>
-        <span class="page-info" id="pageInfo"></span>
-        <button class="page-btn" onclick="changePage(1)">Next &rarr;</button>
+      <div class="status-bar" id="statusBar">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ════════════════ LEI PANE ════════════════ -->
+  <div id="leiPane" style="display:none;flex:1;overflow:hidden;flex-direction:column">
+    <div class="lei-toolbar">
+      <input class="lei-search-box" id="leiQuery" placeholder="Search by entity name…">
+      <button class="lei-btn" onclick="fetchLEI()">Search GLEIF</button>
+      <div class="quick-btns">
+        <span style="font-size:11px;color:var(--muted)">Quick:</span>
+        <button class="quick-btn" onclick="quickLEI('BlackRock Asset Management Ireland')">BlackRock IE</button>
+        <button class="quick-btn" onclick="quickLEI('Amundi Asset Management')">Amundi FR</button>
+        <button class="quick-btn" onclick="quickLEI('DWS Investment')">DWS DE</button>
+        <button class="quick-btn" onclick="quickLEI('Invesco Investment Management Limited')">Invesco IE</button>
+        <button class="quick-btn" onclick="quickLEI('Vanguard Group Ireland')">Vanguard IE</button>
+        <button class="quick-btn" onclick="quickLEI('State Street Global Advisors Europe')">SSGA IE</button>
+        <button class="quick-btn" onclick="quickLEI('WisdomTree Management Limited')">WisdomTree IE</button>
+        <button class="quick-btn" onclick="quickLEI('VanEck Asset Management')">VanEck NL</button>
+        <button class="quick-btn" onclick="quickLEI('Franklin Templeton International Services')">Franklin LU</button>
       </div>
     </div>
-  </main>
-</div>
-</div>
-
-<div id="tab-lei" class="tab-content">
-<div class="lei-wrap">
-  <div style="margin-bottom:20px">
-    <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">LEI Lookup</h2>
-    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with LEI details for the 10 most recently authorised ETFs.</p>
-  </div>
-  <div class="search-row">
-    <input class="search-input" id="leiQuery" placeholder="Search by fund name, ManCo, or LEI code&hellip;" />
-    <button class="search-btn" onclick="fetchLEI()">Search</button>
-  </div>
-  <div class="quick-btns">
-    <span style="font-size:12px;color:var(--muted);align-self:center;margin-right:4px">Quick:</span>
-    <button class="quick-btn" onclick="quickLEI('BlackRock Asset Management Ireland')">BlackRock IE</button>
-    <button class="quick-btn" onclick="quickLEI('Invesco Investment Management Limited')">Invesco IE</button>
-    <button class="quick-btn" onclick="quickLEI('Amundi Asset Management')">Amundi FR</button>
-    <button class="quick-btn" onclick="quickLEI('WisdomTree Management Limited')">WisdomTree IE</button>
-    <button class="quick-btn" onclick="quickLEI('VanEck Asset Management')">VanEck NL</button>
-    <button class="quick-btn" onclick="quickLEI('Franklin Templeton International Services')">Franklin Templeton LU</button>
-    <button class="quick-btn" onclick="quickLEI('State Street Global Advisors Europe')">State Street IE</button>
-    <button class="quick-btn" onclick="quickLEI('DWS Investment')">DWS DE</button>
-    <button class="quick-btn" onclick="quickLEI('JPMorgan Asset Management Europe')">JPMorgan LU</button>
-    <button class="quick-btn" onclick="quickLEI('PIMCO Europe')">PIMCO IE</button>
-    <button class="quick-btn" onclick="quickLEI('Fidelity Investment Management Ireland')">Fidelity IE</button>
-    <button class="quick-btn" onclick="quickLEI('HANetf Limited')">HANetf IE</button>
-  </div>
-  <div id="leiLoading" style="display:none;padding:20px 0">
-    <div style="display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px">
-      <div class="spinner"></div> Querying GLEIF database&hellip;
+    <div class="lei-results" id="leiResults">
+      <div id="leiLoading" style="display:none;color:var(--muted);padding:20px 0">Searching GLEIF…</div>
+      <div id="leiSectionLabel" class="lei-section-label"></div>
+      <div id="leiCards"></div>
     </div>
   </div>
-  <div id="leiSection">
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px" id="leiSectionLabel">10 most recently authorised ETFs</div>
-    <div id="leiResults"></div>
+
+  <!-- ════════════════ ICAV PANE ════════════════ -->
+  <div id="icavPane" style="display:none;flex:1;overflow:hidden;flex-direction:column">
+    <div class="icav-stats">
+      <div class="icav-stat"><div class="icav-stat-val" id="icavStatTotal">{icav_total:,}</div><div class="icav-stat-lbl">Total ICAVs</div></div>
+      <div class="icav-stat"><div class="icav-stat-val" id="icavStatEtf">{icav_etf}</div><div class="icav-stat-lbl">ETF-Related</div></div>
+      <div class="icav-stat"><div class="icav-stat-val" id="icavStatLiq">{icav_liq}</div><div class="icav-stat-lbl">In Liquidation</div></div>
+      <div class="icav-stat"><div class="icav-stat-val" id="icavStatShown">—</div><div class="icav-stat-lbl">Showing</div></div>
+    </div>
+    <div class="icav-layout">
+      <div class="icav-sidebar">
+        <input class="search-box" id="icavSearch" placeholder="Search ICAVs…" oninput="applyIcavFilters()">
+        <div>
+          <div class="filter-label" style="margin-bottom:6px">Status</div>
+          <select id="icavFilterStatus" onchange="applyIcavFilters()">
+            <option value="all">All ICAVs</option>
+            <option value="active">Active only</option>
+            <option value="liq">In Liquidation</option>
+            <option value="etf">ETF-Related</option>
+          </select>
+        </div>
+        <div>
+          <div class="filter-label" style="margin-bottom:6px">Year registered</div>
+          <select id="icavFilterYear" onchange="applyIcavFilters()"><option value="">All years</option></select>
+        </div>
+      </div>
+      <div class="icav-content">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th onclick="icavSortBy('ICAV Name')">ICAV Name ↕</th>
+                <th onclick="icavSortBy('Reg Number')">Reg Number ↕</th>
+                <th onclick="icavSortBy('Reg Date')">Reg Date ↕</th>
+                <th onclick="icavSortBy('First_Seen')">First Seen ↕</th>
+                <th>Flags</th>
+              </tr>
+            </thead>
+            <tbody id="icavTableBody"></tbody>
+          </table>
+        </div>
+        <div class="status-bar" id="icavStatusBar">Loading…</div>
+      </div>
+    </div>
   </div>
-</div>
-</div>
+
+</div><!-- .main -->
 
 <script>
-const ALL_DATA = """ + data_js + """;
-const MANCO_LABELS = """ + manco_labels + """;
-const MANCO_VALUES = """ + manco_values + """;
-const DEP_LABELS   = """ + dep_labels + """;
-const DEP_VALUES   = """ + dep_values + """;
-const PER_PAGE = 50;
-let filtered = [...ALL_DATA];
-let page = 1;
-let activeFilter = 'all';
-const today = new Date('""" + TODAY + """');
-
-function init() {
-  const mancos = [...new Set(ALL_DATA.map(r=>r.ManCo).filter(Boolean))].sort();
-  const deps   = [...new Set(ALL_DATA.map(r=>r.Depositary).filter(Boolean))].sort();
-  const mSel = document.getElementById('selManco');
-  const dSel = document.getElementById('selDep');
-  mancos.forEach(m => { const o=document.createElement('option'); o.value=o.textContent=m; mSel.appendChild(o); });
-  deps.forEach(d => { const o=document.createElement('option'); o.value=o.textContent=d; dSel.appendChild(o); });
-  applyFilters();
-  buildCharts();
-}
-
-function setFilter(val, btn) {
-  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  activeFilter = val;
-  page = 1;
-  applyFilters();
-}
-
-function applyFilters() {
-  const dFrom  = document.getElementById('dFrom').value;
-  const dTo    = document.getElementById('dTo').value;
-  const manco  = document.getElementById('selManco').value;
-  const dep    = document.getElementById('selDep').value;
-  const search = document.getElementById('searchBox').value.toLowerCase();
-  filtered = ALL_DATA.filter(r => {
-    if (activeFilter==='etf'   && !r.is_etf) return false;
-    if (activeFilter==='new30' && (!r.is_etf||!r.Auth_Date||new Date(r.Auth_Date)<new Date(today-30*864e5))) return false;
-    if (activeFilter==='new90' && (!r.is_etf||!r.Auth_Date||new Date(r.Auth_Date)<new Date(today-90*864e5))) return false;
-    if (dFrom && r.Auth_Date && r.Auth_Date<dFrom) return false;
-    if (dTo   && r.Auth_Date && r.Auth_Date>dTo)   return false;
-    if (manco && r.ManCo !== manco) return false;
-    if (dep   && r.Depositary !== dep) return false;
-    if (search && !r['Fund Name'].toLowerCase().includes(search)) return false;
-    return true;
-  });
-  renderTable();
-}
-
-function renderTable() {
-  const start = (page-1)*PER_PAGE;
-  const rows  = filtered.slice(start, start+PER_PAGE);
-  document.getElementById('rowCount').textContent = '(' + filtered.length.toLocaleString() + ' funds)';
-  document.getElementById('pageInfo').textContent  = 'Page ' + page + ' of ' + (Math.ceil(filtered.length/PER_PAGE)||1);
-  document.getElementById('tableBody').innerHTML = rows.map(r =>
-    '<tr><td>' + r['Fund Name'] + (r.is_etf?' <span class="etf-badge">ETF</span>':'') + '</td>' +
-    '<td>' + (r.ManCo||'') + '</td>' +
-    '<td>' + (r.Depositary||'') + '</td>' +
-    '<td class="mono-date">' + (r.Auth_Date||'') + '</td></tr>'
-  ).join('');
-}
-
-function changePage(d) {
-  const max = Math.ceil(filtered.length/PER_PAGE)||1;
-  page = Math.max(1,Math.min(max,page+d));
-  renderTable();
-}
-
-function exportCSV() {
-  const cols = ['Fund Name','ManCo','Depositary','Auth_Date'];
-  const rows = [cols.join(','), ...filtered.map(r =>
-    cols.map(c => '"' + (r[c]||'').replace(/"/g,'""') + '"').join(',')
-  )];
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([rows.join('\\n')], {type:'text/csv'}));
-  a.download = 'cbi_register_""" + TODAY + """.csv';
-  a.click();
-}
-
-function buildCharts() {
-  const maxM = Math.max(...MANCO_VALUES);
-  document.getElementById('mancoChart').innerHTML = MANCO_LABELS.map((label,i) =>
-    '<div class="bar-row"><div class="bar-label" title="'+label+'">'+label+'</div>' +
-    '<div class="bar-track"><div class="bar-fill" style="width:'+(MANCO_VALUES[i]/maxM*100).toFixed(1)+'%;background:var(--accent)"></div></div>' +
-    '<div class="bar-count">'+MANCO_VALUES[i]+'</div></div>'
-  ).join('');
-
-  const maxD = Math.max(...DEP_VALUES);
-  document.getElementById('depChart').innerHTML = DEP_LABELS.map((label,i) =>
-    '<div class="bar-row"><div class="bar-label" title="'+label+'">'+label+'</div>' +
-    '<div class="bar-track"><div class="bar-fill" style="width:'+(DEP_VALUES[i]/maxD*100).toFixed(1)+'%;background:var(--green)"></div></div>' +
-    '<div class="bar-count">'+DEP_VALUES[i]+'</div></div>'
-  ).join('');
-}
+const ALL_DATA   = {data_json};
+const ICAV_DATA  = {icav_json};
 
 const EU_EEA = new Set(['IE','LU','DE','FR','NL','SE','DK','AT','BE','FI','IT','ES','PT',
   'PL','CZ','HU','SK','RO','BG','HR','SI','EE','LV','LT','CY','MT','GR','NO','IS','LI','CH']);
 
-async function fetchLEI() {
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB SWITCHING
+// ══════════════════════════════════════════════════════════════════════════════
+function switchTab(tab) {{
+  ['cbi','lei','icav'].forEach(t => {{
+    document.getElementById(t + 'Pane').style.display = 'none';
+    document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).classList.remove('active');
+  }});
+  document.getElementById(tab + 'Pane').style.display = 'flex';
+  document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  if (tab === 'icav') renderIcavTable();
+}}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CBI TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function uniqueSorted(arr) {{ return [...new Set(arr.filter(Boolean))].sort(); }}
+
+function populateFilters() {{
+  const mancos = uniqueSorted(ALL_DATA.map(r => r.ManCo));
+  const deps   = uniqueSorted(ALL_DATA.map(r => r.Depositary));
+  const years  = uniqueSorted(ALL_DATA.map(r => (r.Auth_Date||'').substring(0,4))).reverse();
+  const selManco = document.getElementById('filterManco');
+  mancos.forEach(m => {{ const o = new Option(m,m); selManco.add(o); }});
+  const selDep = document.getElementById('filterDep');
+  deps.forEach(d => {{ const o = new Option(d,d); selDep.add(o); }});
+  const selYear = document.getElementById('filterYear');
+  years.forEach(y => {{ const o = new Option(y,y); selYear.add(o); }});
+}}
+
+let sortCol = 'Auth_Date', sortDir = -1;
+function sortBy(col) {{
+  sortDir = (col === sortCol) ? -sortDir : -1;
+  sortCol = col;
+  renderTable();
+}}
+
+function applyFilters() {{
+  const q     = document.getElementById('searchBox').value.toLowerCase();
+  const type  = document.getElementById('filterType').value;
+  const manco = document.getElementById('filterManco').value;
+  const dep   = document.getElementById('filterDep').value;
+  const year  = document.getElementById('filterYear').value;
+
+  window.cbiFiltered = ALL_DATA.filter(r => {{
+    if (q && !r['Fund Name'].toLowerCase().includes(q) &&
+             !(r.ManCo||'').toLowerCase().includes(q) &&
+             !(r.Depositary||'').toLowerCase().includes(q)) return false;
+    if (type === 'etf'   && !r['Fund Name'].toLowerCase().includes('etf')) return false;
+    if (type === 'other' &&  r['Fund Name'].toLowerCase().includes('etf')) return false;
+    if (manco && r.ManCo !== manco) return false;
+    if (dep   && r.Depositary !== dep) return false;
+    if (year  && (r.Auth_Date||'').substring(0,4) !== year) return false;
+    return true;
+  }});
+  renderTable();
+}}
+
+function renderTable() {{
+  const data = (window.cbiFiltered || ALL_DATA).slice().sort((a,b) => {{
+    const av = a[sortCol] || '', bv = b[sortCol] || '';
+    return av < bv ? -sortDir : av > bv ? sortDir : 0;
+  }});
+  const etfCount = data.filter(r => r['Fund Name'].toLowerCase().includes('etf')).length;
+  document.getElementById('statVisible').textContent = data.length.toLocaleString();
+  document.getElementById('statEtf').textContent = etfCount.toLocaleString();
+  document.getElementById('statusBar').textContent = `Showing ${{data.length.toLocaleString()}} of {total:,} funds`;
+  document.getElementById('tableBody').innerHTML = data.map(r => {{
+    const isEtf = r['Fund Name'].toLowerCase().includes('etf');
+    return `<tr>
+      <td style="max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${{r['Fund Name']}}</td>
+      <td style="color:var(--muted)">${{r.ManCo || '—'}}</td>
+      <td style="color:var(--muted)">${{r.Depositary || '—'}}</td>
+      <td style="font-family:monospace;font-size:11px">${{r.Auth_Date || '—'}}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--accent)">${{r.First_Seen || '—'}}</td>
+      <td><span class="badge ${{isEtf ? 'badge-etf' : 'badge-other'}}">${{isEtf ? 'ETF' : 'FUND'}}</span></td>
+    </tr>`;
+  }}).join('');
+}}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LEI TAB
+// ══════════════════════════════════════════════════════════════════════════════
+async function fetchLEI() {{
   const q = document.getElementById('leiQuery').value.trim();
   if (!q) return;
-  setLeiLoading(true);
-  document.getElementById('leiSectionLabel').textContent = 'Search results for "' + q + '"';
-  try {
+  document.getElementById('leiLoading').style.display = 'block';
+  document.getElementById('leiCards').innerHTML = '';
+  document.getElementById('leiSectionLabel').textContent = '';
+  try {{
     const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(q) + '&page[size]=50';
     const data = await (await fetch(url)).json();
-    const euOnly = (data.data || []).filter(r => EU_EEA.has((r.attributes?.entity?.legalAddress?.country || '')));
-    renderLEI(euOnly, euOnly.length);
-  } catch(e) {
-    document.getElementById('leiResults').innerHTML = '<p style="color:#e05c2c">Error: '+e.message+'</p>';
-  } finally {
-    setLeiLoading(false);
-  }
-}
+    const euOnly = (data.data || []).filter(r => {{
+      const country = r.attributes?.entity?.legalAddress?.country || '';
+      return EU_EEA.has(country);
+    }});
+    document.getElementById('leiSectionLabel').textContent = euOnly.length + ' EU/EEA result(s) for "' + q + '"';
+    renderLEI(euOnly);
+  }} catch(e) {{
+    document.getElementById('leiCards').innerHTML = '<p style="color:#ef4444">Error: ' + e.message + '</p>';
+  }} finally {{
+    document.getElementById('leiLoading').style.display = 'none';
+  }}
+}}
 
-async function autoLoadRecentETFs() {
-  setLeiLoading(true);
-  document.getElementById('leiSectionLabel').textContent = '10 most recently authorised ETFs';
-  // Get last 10 ETFs from our register data
-  const recentETFs = ALL_DATA.filter(r => r.is_etf).slice(0, 10);
-  const results = [];
-  for (const fund of recentETFs) {
-    try {
-      const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=5';
-      const data = await (await fetch(url)).json();
-      const euHit = (data.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
-      if (euHit) {
-        euHit._cbi = fund;
-        results.push(euHit);
-      }
-    } catch(e) {
-      // Skip individual failures silently
-    }
-  }
-  renderLEI(results, results.length);
-  setLeiLoading(false);
-}
-
-function setLeiLoading(on) {
-  document.getElementById('leiLoading').style.display = on ? 'block' : 'none';
-  document.getElementById('leiSection').style.display = on ? 'none' : 'block';
-}
-
-function renderLEI(records, total) {
-  if (!records.length) {
-    document.getElementById('leiResults').innerHTML = '<p style="color:var(--muted);padding:20px 0">No EU/EEA results found.</p>';
+function renderLEI(records) {{
+  if (!records.length) {{
+    document.getElementById('leiCards').innerHTML = '<p style="color:var(--muted);padding:20px 0">No EU/EEA results found.</p>';
     return;
-  }
-  document.getElementById('leiSectionLabel').textContent = (total || records.length) + ' EU/EEA result(s)';
-  document.getElementById('leiResults').innerHTML = records.map(r => {
-    const attr   = r.attributes || {};
-    const entity = attr.entity || {};
-    const reg    = attr.registration || {};
-    const laddr  = entity.legalAddress || {};
-    const raddr  = entity.registeredAddress || {};
-
-    // Name: GLEIF returns legalName as {value, language} object
-    const legalNameObj = entity.legalName || {};
-    const name        = legalNameObj.value || legalNameObj || r.id || 'Unknown';
-    const otherNames  = (entity.otherNames || []).map(n => n.value || n).filter(Boolean);
-    const lei         = r.id || '';
-    const country     = laddr.country || '';
-    const city        = laddr.city || '';
-    const addrLine    = [laddr.addressLines?.[0], laddr.postalCode, city, country].filter(Boolean).join(', ');
+  }}
+  document.getElementById('leiCards').innerHTML = records.map(r => {{
+    const attr   = r.attributes || {{}};
+    const entity = attr.entity || {{}};
+    const reg    = attr.registration || {{}};
+    const laddr  = entity.legalAddress || {{}};
+    const raddr  = entity.registeredAddress || {{}};
+    const rawName = entity.legalName || {{}};
+    const name    = (typeof rawName === 'object' ? rawName.value : rawName) || r.id;
+    const otherNames = (entity.otherNames || []).map(n => typeof n === 'object' ? n.value : n).filter(Boolean);
+    const lei       = r.id || '';
+    const country   = laddr.country || '';
+    const city      = laddr.city || '';
+    const addrLine  = [laddr.addressLines?.[0], city, country].filter(Boolean).join(', ');
+    const status    = (reg.status || '').toLowerCase() === 'issued' ? 'issued' : 'lapsed';
+    const registered  = (reg.initialRegistrationDate || '').substring(0,10);
+    const lastUpdate  = (reg.lastUpdateDate || '').substring(0,10);
+    const nextRenewal = (reg.nextRenewalDate || '').substring(0,10);
     const legalForm   = entity.legalForm?.id || '';
-    const category    = entity.entityCategory || '';
-    const subCategory = entity.entitySubCategory || '';
-    const status      = (reg.status || '').toLowerCase() === 'issued' ? 'issued' : 'lapsed';
-    const registered  = (reg.initialRegistrationDate || '').substring(0, 10);
-    const lastUpdate  = (reg.lastUpdateDate || '').substring(0, 10);
-    const nextRenewal = (reg.nextRenewalDate || '').substring(0, 10);
-    const managingOU  = attr.managingOU?.name || attr.managingOU?.id || '';
+    const category    = entity.category || '';
     const jurisdiction= entity.jurisdiction || '';
+    const managingOU  = reg.managingLou || '';
+    const cbiMatches  = ALL_DATA.filter(d => {{
+      const n = d.ManCo || '';
+      return n.length > 4 && name.toLowerCase().includes(n.toLowerCase().substring(0,12));
+    }}).slice(0,3);
+    const cbiHtml = cbiMatches.length ? `
+      <div class="lei-cbi-match">
+        <div style="font-size:10px;color:var(--accent);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Matched CBI Funds</div>
+        ${{cbiMatches.map(d => `<div class="lei-cbi-row"><span>${{d['Fund Name']}}</span><span>${{d.Auth_Date}}</span></div>`).join('')}}
+      </div>` : '';
+    return `<div class="lei-card">
+      <div class="lei-card-header">
+        <div>
+          <div class="lei-card-title">${{name}}</div>
+          ${{otherNames.length ? '<div style="font-size:11px;color:var(--muted);margin-top:2px">Also: ' + otherNames.slice(0,2).join(', ') + '</div>' : ''}}
+          <div class="lei-card-sub">${{addrLine}}${{category ? ' &middot; ' + category : ''}}</div>
+        </div>
+        <span class="lei-status-badge ${{status}}">${{status.toUpperCase()}}</span>
+      </div>
+      <div class="lei-card-body">
+        <div class="lei-field"><label>LEI Code</label><span class="mono">${{lei}}</span></div>
+        <div class="lei-field"><label>Jurisdiction</label><span>${{jurisdiction || country || '—'}}</span></div>
+        <div class="lei-field"><label>Legal Form</label><span>${{legalForm || '—'}}</span></div>
+        <div class="lei-field"><label>Category</label><span>${{category || '—'}}</span></div>
+        <div class="lei-field"><label>Managing LOU</label><span>${{managingOU || '—'}}</span></div>
+        <div class="lei-field"><label>Registered Address</label><span style="font-size:11px">${{[raddr.addressLines?.[0], raddr.city, raddr.country].filter(Boolean).join(', ') || '—'}}</span></div>
+      </div>
+      <div class="lei-card-footer">
+        <div class="lei-footer-item">Registered <strong>${{registered || '—'}}</strong></div>
+        <div class="lei-footer-item">Updated <strong>${{lastUpdate || '—'}}</strong></div>
+        <div class="lei-footer-item">Renewal <strong>${{nextRenewal || '—'}}</strong></div>
+        <div class="lei-footer-item" style="margin-left:auto">
+          <a href="https://search.gleif.org/#/record/${{lei}}" target="_blank" style="color:var(--accent);font-size:11px">View on GLEIF &rarr;</a>
+        </div>
+      </div>
+      ${{cbiHtml}}
+    </div>`;
+  }}).join('');
+}}
 
-    // Country flag emoji
-    const flag = country.length === 2
-      ? String.fromCodePoint(...[...country.toUpperCase()].map(c => c.charCodeAt(0) + 127397))
-      : '';
-
-    // CBI register cross-reference
-    const cbi = r._cbi || null;
-    const cbiHtml = cbi ? (
-      '<div class="lei-cbi-match">' +
-      '<div class="lei-cbi-match-label">&#x2713; CBI Register Match</div>' +
-      '<div class="lei-grid">' +
-      '<div class="lei-cbi-row"><span>Fund Name</span><span>' + cbi['Fund Name'] + '</span></div>' +
-      (cbi.ManCo ? '<div class="lei-cbi-row"><span>ManCo</span><span>' + cbi.ManCo + '</span></div>' : '') +
-      (cbi.Depositary ? '<div class="lei-cbi-row"><span>Depositary</span><span>' + cbi.Depositary + '</span></div>' : '') +
-      (cbi.Auth_Date ? '<div class="lei-cbi-row"><span>Auth Date</span><span>' + cbi.Auth_Date + '</span></div>' : '') +
-      '</div></div>'
-    ) : '';
-
-    return '<div class="lei-card">' +
-      // Header: name + status
-      '<div class="lei-card-header">' +
-        '<div style="flex:1;min-width:0">' +
-          '<div class="lei-card-title">' + flag + ' ' + name + '</div>' +
-          (otherNames.length ? '<div style="font-size:11px;color:var(--muted);margin-top:2px">Also known as: ' + otherNames.slice(0,2).join(', ') + '</div>' : '') +
-          '<div class="lei-card-sub">' + (addrLine || [city,country].filter(Boolean).join(', ')) +
-            (category ? ' &nbsp;&middot;&nbsp; ' + category : '') +
-            (subCategory ? ' / ' + subCategory : '') +
-          '</div>' +
-        '</div>' +
-        '<span class="lei-status-badge ' + status + '">' + status.toUpperCase() + '</span>' +
-      '</div>' +
-      // Body: key fields in grid
-      '<div class="lei-card-body">' +
-        '<div class="lei-field" style="grid-column:1/-1"><label>LEI Code</label><span class="mono" style="font-size:13px;letter-spacing:.04em">' + lei + '</span></div>' +
-        '<div class="lei-field"><label>Jurisdiction</label><span>' + (jurisdiction || country || '—') + '</span></div>' +
-        '<div class="lei-field"><label>Legal Form</label><span>' + (legalForm || '—') + '</span></div>' +
-        '<div class="lei-field"><label>Entity Category</label><span>' + (category || '—') + '</span></div>' +
-        '<div class="lei-field"><label>Managing OU</label><span>' + (managingOU || '—') + '</span></div>' +
-        '<div class="lei-field"><label>Registered Address</label><span style="font-size:11px">' + ([raddr.addressLines?.[0], raddr.city, raddr.country].filter(Boolean).join(', ') || addrLine || '—') + '</span></div>' +
-      '</div>' +
-      // Footer: dates + GLEIF link
-      '<div class="lei-card-footer">' +
-        '<div class="lei-footer-item">Registered <strong>' + (registered || '—') + '</strong></div>' +
-        '<div class="lei-footer-item">Last updated <strong>' + (lastUpdate || '—') + '</strong></div>' +
-        '<div class="lei-footer-item">Next renewal <strong>' + (nextRenewal || '—') + '</strong></div>' +
-        '<div class="lei-footer-item" style="margin-left:auto">' +
-          '<a href="https://search.gleif.org/#/record/' + lei + '" target="_blank" style="color:var(--accent);font-size:11px">View on GLEIF &rarr;</a>' +
-        '</div>' +
-      '</div>' +
-      cbiHtml +
-    '</div>';
-  }).join('');
-}
-
-function quickLEI(q) {
+function quickLEI(q) {{
   document.getElementById('leiQuery').value = q;
   fetchLEI();
-}
-document.getElementById('leiQuery').addEventListener('keydown', e => { if(e.key==='Enter') fetchLEI(); });
+}}
+document.getElementById('leiQuery').addEventListener('keydown', e => {{ if(e.key==='Enter') fetchLEI(); }});
 
-let leiLoaded = false;
+// ══════════════════════════════════════════════════════════════════════════════
+// ICAV TAB
+// ══════════════════════════════════════════════════════════════════════════════
+let icavSortCol = 'Reg Date', icavSortDir = -1;
 
-function switchTab(t) {
-  document.querySelectorAll('.tab').forEach((el,i) => el.classList.toggle('active',(i===0&&t==='cbi')||(i===1&&t==='lei')));
-  document.getElementById('tab-cbi').classList.toggle('active',t==='cbi');
-  document.getElementById('tab-lei').classList.toggle('active',t==='lei');
-  if (t === 'lei' && !leiLoaded) {
-    leiLoaded = true;
-    autoLoadRecentETFs();
-  }
-}
+function icavSortBy(col) {{
+  icavSortDir = (col === icavSortCol) ? -icavSortDir : -1;
+  icavSortCol = col;
+  renderIcavTable();
+}}
 
-init();
+(function populateIcavFilters() {{
+  const years = [...new Set(ICAV_DATA.map(r => (r['Reg Date']||'').substring(0,4)).filter(Boolean))].sort().reverse();
+  const sel = document.getElementById('icavFilterYear');
+  years.forEach(y => sel.add(new Option(y, y)));
+}})();
+
+function applyIcavFilters() {{
+  renderIcavTable();
+}}
+
+function renderIcavTable() {{
+  const q      = (document.getElementById('icavSearch').value || '').toLowerCase();
+  const status = document.getElementById('icavFilterStatus').value;
+  const year   = document.getElementById('icavFilterYear').value;
+
+  let data = ICAV_DATA.filter(r => {{
+    const name = (r['ICAV Name'] || '').toLowerCase();
+    if (q && !name.includes(q)) return false;
+    if (status === 'active' && r['In Liquidation'] === 'Yes') return false;
+    if (status === 'liq'    && r['In Liquidation'] !== 'Yes') return false;
+    if (status === 'etf'    && r['ETF Related']    !== 'Yes') return false;
+    if (year && (r['Reg Date']||'').substring(0,4) !== year) return false;
+    return true;
+  }});
+
+  data = data.slice().sort((a,b) => {{
+    const av = a[icavSortCol] || '', bv = b[icavSortCol] || '';
+    return av < bv ? -icavSortDir : av > bv ? icavSortDir : 0;
+  }});
+
+  document.getElementById('icavStatShown').textContent = data.length.toLocaleString();
+  document.getElementById('icavStatusBar').textContent = `Showing ${{data.length.toLocaleString()}} of {icav_total:,} ICAVs`;
+
+  document.getElementById('icavTableBody').innerHTML = data.map(r => {{
+    const inLiq = r['In Liquidation'] === 'Yes';
+    const isEtf = r['ETF Related'] === 'Yes';
+    const flags = [
+      inLiq ? '<span class="badge badge-liq">IN LIQ</span>' : '',
+      isEtf ? '<span class="badge badge-etf">ETF</span>'    : '',
+    ].filter(Boolean).join(' ') || '<span style="color:var(--muted)">—</span>';
+    return `<tr>
+      <td style="max-width:400px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${{r['ICAV Name'] || '—'}}</td>
+      <td style="font-family:monospace;font-size:11px">${{r['Reg Number'] || '—'}}</td>
+      <td style="font-family:monospace;font-size:11px">${{r['Reg Date'] || '—'}}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--accent)">${{r['First_Seen'] || '—'}}</td>
+      <td>${{flags}}</td>
+    </tr>`;
+  }}).join('');
+}}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════════════════
+populateFilters();
+applyFilters();
 </script>
 </body>
 </html>"""
+
 
 def main():
     os.makedirs(os.path.dirname(HTML_OUT), exist_ok=True)
 
     if not os.path.exists(CSV_PATH):
-        print("WARNING: CSV not found — writing placeholder dashboard")
-        df = pd.DataFrame(columns=["Fund Name", "ManCo", "Depositary", "Auth_Date"])
+        print(f"WARNING: {CSV_PATH} not found — using empty CBI data")
+        df = pd.DataFrame(columns=['Fund Name', 'ManCo', 'Depositary', 'Auth_Date', 'First_Seen'])
     else:
         df = pd.read_csv(CSV_PATH)
 
-    html = build_html(df)
-    with open(HTML_OUT, "w", encoding="utf-8") as f:
-        f.write(html)
-    print("Dashboard written to", HTML_OUT, "(" + str(os.path.getsize(HTML_OUT)//1024) + " KB)")
+    if not os.path.exists(ICAV_PATH):
+        print(f"WARNING: {ICAV_PATH} not found — using empty ICAV data")
+        icav_df = pd.DataFrame(columns=['ICAV Name', 'Reg Date', 'Reg Number', 'In Liquidation', 'ETF Related', 'First_Seen'])
+    else:
+        icav_df = pd.read_csv(ICAV_PATH)
 
-if __name__ == "__main__":
+    html = build_html(df, icav_df)
+    with open(HTML_OUT, 'w', encoding='utf-8') as f:
+        f.write(html)
+
+    nojekyll = os.path.join(os.path.dirname(HTML_OUT), '.nojekyll')
+    open(nojekyll, 'a').close()
+
+    print(f"Dashboard written → {HTML_OUT}  ({os.path.getsize(HTML_OUT)//1024} KB)")
+    print(f"  CBI funds: {len(df):,}  |  ICAVs: {len(icav_df):,}")
+
+
+if __name__ == '__main__':
     main()
