@@ -117,6 +117,8 @@ tr:hover td{background:var(--surface2)}
 .lei-status-badge{font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .issued{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
 .lapsed{background:#e05c2c22;color:#e05c2c;border:1px solid #e05c2c44}
+.pending{background:#f0b42922;color:var(--accent);border:1px solid #f0b42944}
+.other-status{background:#88888822;color:var(--muted);border:1px solid #88888844}
 .lei-card-body{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
 .lei-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:3px}
 .lei-field span{font-size:12px;color:var(--text)}
@@ -473,12 +475,12 @@ function renderLEI(records, total) {
     const laddr  = entity.legalAddress || {};
     const raddr  = entity.registeredAddress || {};
 
-    // Name: GLEIF returns legalName as {value, language} object OR plain string
+    // Name: GLEIF returns legalName as {name, language} object OR plain string
     const legalNameRaw = entity.legalName;
     const name = (typeof legalNameRaw === 'string')
       ? legalNameRaw
-      : (legalNameRaw?.value || r.id || 'Unknown');
-    const otherNames  = (entity.otherNames || []).map(n => n.value || n).filter(Boolean);
+      : (legalNameRaw?.name || legalNameRaw?.value || r.id || 'Unknown');
+    const otherNames  = (entity.otherNames || []).map(n => n?.name || n?.value || n).filter(s => typeof s === 'string' && s);
     const lei         = r.id || '';
     const country     = laddr.country || '';
     const city        = laddr.city || '';
@@ -486,7 +488,12 @@ function renderLEI(records, total) {
     const legalForm   = entity.legalForm?.id || '';
     const category    = entity.entityCategory || '';
     const subCategory = entity.entitySubCategory || '';
-    const status      = (reg.status || '').toLowerCase() === 'issued' ? 'issued' : 'lapsed';
+    const rawStatus   = (reg.status || '').toUpperCase();
+    const statusLabel = rawStatus.replace(/_/g, ' ') || 'UNKNOWN';
+    const statusClass = rawStatus === 'ISSUED' ? 'issued'
+      : rawStatus === 'LAPSED' ? 'lapsed'
+      : rawStatus.startsWith('PENDING') ? 'pending'
+      : 'other-status';
     const registered  = (reg.initialRegistrationDate || '').substring(0, 10);
     const lastUpdate  = (reg.lastUpdateDate || '').substring(0, 10);
     const nextRenewal = (reg.nextRenewalDate || '').substring(0, 10);
@@ -544,7 +551,7 @@ function renderLEI(records, total) {
             (subCategory ? ' / ' + subCategory : '') +
           '</div>' +
         '</div>' +
-        '<span class="lei-status-badge ' + status + '">' + status.toUpperCase() + '</span>' +
+        '<span class="lei-status-badge ' + statusClass + '">' + statusLabel + '</span>' +
       '</div>' +
       // Body: key fields in grid
       '<div class="lei-card-body">' +
