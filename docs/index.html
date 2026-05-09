@@ -168,7 +168,7 @@ tr:hover td{background:var(--surface2)}
 <div class="lei-wrap">
   <div style="margin-bottom:20px">
     <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">LEI Lookup</h2>
-    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with LEI details for the 10 most recently authorised ETFs.</p>
+    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with the 10 most recently registered Irish fund LEIs (any registration status).</p>
   </div>
   <div class="search-row">
     <input class="search-input" id="leiQuery" placeholder="Fund name, ManCo, or paste a 20-character LEI code directly&hellip;" />
@@ -349,67 +349,42 @@ async function fetchLEI() {
   }
 }
 
-async function autoLoadRecentETFs() {
+async function autoLoadRecentLEIs() {
   setLeiLoading(true);
-  document.getElementById('leiSectionLabel').textContent = 'Loading 10 most recently authorised UCITS ETFs…';
+  document.getElementById('leiSectionLabel').textContent = 'Loading 10 most recently registered Irish fund LEIs…';
 
-  // Get last 10 funds with "UCITS ETF" in name, sorted most recent first
-  const recentETFs = ALL_DATA
-    .filter(r => r['Fund Name'] && r['Fund Name'].toUpperCase().includes('UCITS ETF'))
-    .slice(0, 10);
+  try {
+    // Query GLEIF directly for the 10 most recently registered Irish fund LEIs.
+    // No status filter — this surfaces PENDING_VALIDATION / PENDING_TRANSFER
+    // records as well as ISSUED ones, so newly minted LEIs show up immediately.
+    const url = 'https://api.gleif.org/api/v1/lei-records' +
+      '?filter[entity.legalAddress.country]=IE' +
+      '&filter[entity.category]=FUND' +
+      '&sort=-registration.initialRegistrationDate' +
+      '&page[size]=10';
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const records = data.data || [];
 
-  const results = [];
-  for (const fund of recentETFs) {
-    // Start with a synthetic record from CBI data so all 10 always show
-    const syntheticRecord = {
-      id: null,
-      _cbi: fund,
-      _synthetic: true,
-      attributes: {
-        entity: {
-          legalName: fund['Fund Name'],
-          legalAddress: { country: 'IE', city: '' },
-          entityCategory: 'FUND',
-          jurisdiction: 'IE'
-        },
-        registration: { status: 'ISSUED' }
-      }
-    };
-
-    try {
-      // Try exact name search
-      const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=5';
-      const data = await (await fetch(url)).json();
-      let hit = (data.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
-
-      // Fallback: strip suffix after last dash/bracket and retry
-      if (!hit) {
-        const shortName = fund['Fund Name']
-          .replace(/\s+[A-Z]{3}\s+(Acc|Dist|Hdg|H).*$/i, '')
-          .replace(/\s*\(.*\)\s*$/, '')
-          .trim();
-        if (shortName && shortName !== fund['Fund Name']) {
-          const url2 = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(shortName) + '&page[size]=5';
-          const data2 = await (await fetch(url2)).json();
-          hit = (data2.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
-        }
-      }
-
-      if (hit) {
-        hit._cbi = fund;
-        results.push(hit);
-      } else {
-        // No GLEIF match — show CBI data only
-        results.push(syntheticRecord);
-      }
-    } catch(e) {
-      results.push(syntheticRecord);
+    // Cross-reference each LEI with the CBI register by exact fund name.
+    const cbiByName = {};
+    for (const f of ALL_DATA) {
+      if (f['Fund Name']) cbiByName[f['Fund Name'].toUpperCase()] = f;
     }
-  }
+    for (const rec of records) {
+      const ln = rec.attributes?.entity?.legalName;
+      const nm = (typeof ln === 'string' ? ln : (ln?.name || ln?.value || '')) || '';
+      const match = nm ? cbiByName[nm.toUpperCase()] : null;
+      if (match) rec._cbi = match;
+    }
 
-  document.getElementById('leiSectionLabel').textContent = '10 most recently authorised UCITS ETFs';
-  renderLEI(results, results.length);
-  setLeiLoading(false);
+    document.getElementById('leiSectionLabel').textContent = '10 most recently registered Irish fund LEIs';
+    renderLEI(records, records.length);
+  } catch(e) {
+    document.getElementById('leiResults').innerHTML = '<p style="color:#e05c2c">Error loading recent LEIs: ' + e.message + '</p>';
+  } finally {
+    setLeiLoading(false);
+  }
 }
 
 function setLeiLoading(on) {
@@ -545,7 +520,7 @@ function switchTab(t) {
   document.getElementById('tab-lei').classList.toggle('active',t==='lei');
   if (t === 'lei' && !leiLoaded) {
     leiLoaded = true;
-    autoLoadRecentETFs();
+    autoLoadRecentLEIs();
   }
 }
 
