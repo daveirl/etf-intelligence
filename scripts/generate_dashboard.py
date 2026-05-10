@@ -281,10 +281,10 @@ tr:hover td{background:var(--surface2)}
   </aside>
   <main class="main">
     <div class="sub-tabs">
-      <div class="sub-tab active" data-sub="cbi-stats" onclick="switchSubTab('cbi','stats')">Stats</div>
-      <div class="sub-tab" data-sub="cbi-results" onclick="switchSubTab('cbi','results')">Results</div>
+      <div class="sub-tab" data-sub="cbi-stats" onclick="switchSubTab('cbi','stats')">Stats</div>
+      <div class="sub-tab active" data-sub="cbi-results" onclick="switchSubTab('cbi','results')">Results</div>
     </div>
-    <div id="cbi-sub-stats" class="sub-tab-content active">
+    <div id="cbi-sub-stats" class="sub-tab-content">
       <div class="stats-row">
         <div class="stat"><div class="stat-val">""" + str(total) + """</div><div class="stat-lbl">Total Funds</div></div>
         <div class="stat"><div class="stat-val">""" + str(total_etf) + """</div><div class="stat-lbl">ETFs</div></div>
@@ -300,7 +300,7 @@ tr:hover td{background:var(--surface2)}
         <div class="chart-card"><h3>Authorisations by Year (ETF vs non-ETF)</h3><div id="yearChart"></div></div>
       </div>
     </div>
-    <div id="cbi-sub-results" class="sub-tab-content">
+    <div id="cbi-sub-results" class="sub-tab-content active">
       <div class="table-wrap">
         <div class="table-header">
           <h2>Fund Register <span id="rowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
@@ -357,10 +357,10 @@ tr:hover td{background:var(--surface2)}
   </aside>
   <main class="main">
     <div class="sub-tabs">
-      <div class="sub-tab active" data-sub="aif-stats" onclick="switchSubTab('aif','stats')">Stats</div>
-      <div class="sub-tab" data-sub="aif-results" onclick="switchSubTab('aif','results')">Results</div>
+      <div class="sub-tab" data-sub="aif-stats" onclick="switchSubTab('aif','stats')">Stats</div>
+      <div class="sub-tab active" data-sub="aif-results" onclick="switchSubTab('aif','results')">Results</div>
     </div>
-    <div id="aif-sub-stats" class="sub-tab-content active">
+    <div id="aif-sub-stats" class="sub-tab-content">
       <div class="stats-row">
         <div class="stat"><div class="stat-val">""" + str(aif_total) + """</div><div class="stat-lbl">Total AIFs (ICAV-form)</div></div>
         <div class="stat"><div class="stat-val">""" + str(aif_new_30) + """</div><div class="stat-lbl">New (30d)</div></div>
@@ -372,7 +372,7 @@ tr:hover td{background:var(--surface2)}
         <div class="chart-card"><h3>Depositary Market Share</h3><div id="aifDepChart"></div></div>
       </div>
     </div>
-    <div id="aif-sub-results" class="sub-tab-content">
+    <div id="aif-sub-results" class="sub-tab-content active">
       <div class="table-wrap">
         <div class="table-header">
           <h2>AIF Register <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:4px">ICAV-form, ICAV Act 2015</span> <span id="aifRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
