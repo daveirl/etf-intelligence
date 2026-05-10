@@ -21,15 +21,16 @@ Features:
 etf-intelligence/
 ├── .github/
 │   └── workflows/
-│       └── weekly_sync.yml       # GitHub Actions — runs every Friday at 07:00 UTC
+│       └── weeklysync.yml         # GitHub Actions — runs every Friday at 07:00 UTC
 ├── data/
-│   └── cbi_shadow_db.csv         # Shadow database (auto-updated by Actions)
+│   └── cbi_shadow_db.csv          # Shadow database (auto-updated by Actions)
 ├── docs/
-│   ├── index.html                # Dashboard (served by GitHub Pages)
-│   └── .nojekyll                 # Disables Jekyll so GitHub Pages serves HTML directly
+│   ├── index.html                 # Dashboard (served by GitHub Pages)
+│   └── .nojekyll                  # Disables Jekyll so GitHub Pages serves HTML directly
 ├── scripts/
-│   ├── cbi_shadow_sync_v2.py     # Downloads + parses CBI PDF, updates CSV
-│   └── generate_dashboard.py     # Reads CSV, writes docs/index.html
+│   ├── cbi_shadow_sync_v2.py      # Downloads + parses CBI PDF, updates CSV
+│   └── generate_dashboard.py      # Reads CSV, writes docs/index.html
+├── .gitignore
 └── README.md
 ```
 
@@ -39,7 +40,7 @@ etf-intelligence/
 
 2. **`generate_dashboard.py`** reads the CSV and bakes everything into a self-contained `docs/index.html` with all data embedded as JSON — no server required.
 
-3. **`weekly_sync.yml`** runs both scripts every Friday morning, then commits the updated CSV and dashboard back to the repo. GitHub Pages picks up the new `index.html` automatically.
+3. **`weeklysync.yml`** runs both scripts every Friday morning, then commits the updated CSV and dashboard back to the repo. GitHub Pages picks up the new `index.html` automatically.
 
 ## Setup
 
