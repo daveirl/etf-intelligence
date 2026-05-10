@@ -18,6 +18,12 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;fon
 .tab{padding:14px 20px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;transition:.2s}
 .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 .tab-content{display:none}.tab-content.active{display:block}
+.sub-tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border)}
+.sub-tab{padding:8px 16px;cursor:pointer;font-size:12px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;transition:.15s;margin-bottom:-1px}
+.sub-tab:hover{color:var(--text)}
+.sub-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.sub-tab-content{display:none}
+.sub-tab-content.active{display:block}
 .layout{display:grid;grid-template-columns:260px 1fr;min-height:calc(100vh - 120px)}
 .sidebar{background:var(--surface);border-right:1px solid var(--border);padding:20px;display:flex;flex-direction:column;gap:16px}
 .sidebar h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
@@ -139,37 +145,45 @@ tr:hover td{background:var(--surface2)}
     </div>
   </aside>
   <main class="main">
-    <div class="stats-row">
-      <div class="stat"><div class="stat-val">6583</div><div class="stat-lbl">Total Funds</div></div>
-      <div class="stat"><div class="stat-val">1899</div><div class="stat-lbl">ETFs</div></div>
-      <div class="stat"><div class="stat-val">37</div><div class="stat-lbl">New ETFs (30d)</div></div>
-      <div class="stat"><div class="stat-val">88</div><div class="stat-lbl">New ETFs (90d)</div></div>
-      <div class="stat"><div class="stat-val">100</div><div class="stat-lbl">ETFs YTD 2026</div></div>
+    <div class="sub-tabs">
+      <div class="sub-tab active" data-sub="cbi-stats" onclick="switchSubTab('cbi','stats')">Stats</div>
+      <div class="sub-tab" data-sub="cbi-results" onclick="switchSubTab('cbi','results')">Results</div>
     </div>
-    <div class="charts-row">
-      <div class="chart-card"><h3>Top Management Companies</h3><div id="mancoChart"></div></div>
-      <div class="chart-card"><h3>Depositary Market Share</h3><div id="depChart"></div></div>
-    </div>
-    <div class="charts-row" style="grid-template-columns:1fr">
-      <div class="chart-card"><h3>Authorisations by Year (ETF vs non-ETF)</h3><div id="yearChart"></div></div>
-    </div>
-    <div class="table-wrap">
-      <div class="table-header">
-        <h2>Fund Register <span id="rowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
-        <button class="export-btn" onclick="exportCSV()">Export CSV</button>
+    <div id="cbi-sub-stats" class="sub-tab-content active">
+      <div class="stats-row">
+        <div class="stat"><div class="stat-val">6583</div><div class="stat-lbl">Total Funds</div></div>
+        <div class="stat"><div class="stat-val">1899</div><div class="stat-lbl">ETFs</div></div>
+        <div class="stat"><div class="stat-val">37</div><div class="stat-lbl">New ETFs (30d)</div></div>
+        <div class="stat"><div class="stat-val">88</div><div class="stat-lbl">New ETFs (90d)</div></div>
+        <div class="stat"><div class="stat-val">100</div><div class="stat-lbl">ETFs YTD 2026</div></div>
       </div>
-      <div style="overflow-x:auto">
-        <table>
-          <thead><tr>
-            <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
-          </tr></thead>
-          <tbody id="tableBody"></tbody>
-        </table>
+      <div class="charts-row">
+        <div class="chart-card"><h3>Top Management Companies</h3><div id="mancoChart"></div></div>
+        <div class="chart-card"><h3>Depositary Market Share</h3><div id="depChart"></div></div>
       </div>
-      <div class="pagination">
-        <button class="page-btn" onclick="changePage(-1)">&larr; Prev</button>
-        <span class="page-info" id="pageInfo"></span>
-        <button class="page-btn" onclick="changePage(1)">Next &rarr;</button>
+      <div class="charts-row" style="grid-template-columns:1fr">
+        <div class="chart-card"><h3>Authorisations by Year (ETF vs non-ETF)</h3><div id="yearChart"></div></div>
+      </div>
+    </div>
+    <div id="cbi-sub-results" class="sub-tab-content">
+      <div class="table-wrap">
+        <div class="table-header">
+          <h2>Fund Register <span id="rowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
+          <button class="export-btn" onclick="exportCSV()">Export CSV</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr>
+              <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
+            </tr></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button class="page-btn" onclick="changePage(-1)">&larr; Prev</button>
+          <span class="page-info" id="pageInfo"></span>
+          <button class="page-btn" onclick="changePage(1)">Next &rarr;</button>
+        </div>
       </div>
     </div>
   </main>
@@ -207,33 +221,41 @@ tr:hover td{background:var(--surface2)}
     </div>
   </aside>
   <main class="main">
-    <div class="stats-row">
-      <div class="stat"><div class="stat-val">2435</div><div class="stat-lbl">Total AIFs (ICAV-form)</div></div>
-      <div class="stat"><div class="stat-val">4</div><div class="stat-lbl">New (30d)</div></div>
-      <div class="stat"><div class="stat-val">50</div><div class="stat-lbl">New (90d)</div></div>
-      <div class="stat"><div class="stat-val">78</div><div class="stat-lbl">YTD 2026</div></div>
+    <div class="sub-tabs">
+      <div class="sub-tab active" data-sub="aif-stats" onclick="switchSubTab('aif','stats')">Stats</div>
+      <div class="sub-tab" data-sub="aif-results" onclick="switchSubTab('aif','results')">Results</div>
     </div>
-    <div class="charts-row">
-      <div class="chart-card"><h3>Top Management Companies</h3><div id="aifMancoChart"></div></div>
-      <div class="chart-card"><h3>Depositary Market Share</h3><div id="aifDepChart"></div></div>
-    </div>
-    <div class="table-wrap">
-      <div class="table-header">
-        <h2>AIF Register <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:4px">ICAV-form, ICAV Act 2015</span> <span id="aifRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
-        <button class="export-btn" onclick="exportAifCSV()">Export CSV</button>
+    <div id="aif-sub-stats" class="sub-tab-content active">
+      <div class="stats-row">
+        <div class="stat"><div class="stat-val">2435</div><div class="stat-lbl">Total AIFs (ICAV-form)</div></div>
+        <div class="stat"><div class="stat-val">4</div><div class="stat-lbl">New (30d)</div></div>
+        <div class="stat"><div class="stat-val">50</div><div class="stat-lbl">New (90d)</div></div>
+        <div class="stat"><div class="stat-val">78</div><div class="stat-lbl">YTD 2026</div></div>
       </div>
-      <div style="overflow-x:auto">
-        <table>
-          <thead><tr>
-            <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
-          </tr></thead>
-          <tbody id="aifTableBody"></tbody>
+      <div class="charts-row">
+        <div class="chart-card"><h3>Top Management Companies</h3><div id="aifMancoChart"></div></div>
+        <div class="chart-card"><h3>Depositary Market Share</h3><div id="aifDepChart"></div></div>
+      </div>
+    </div>
+    <div id="aif-sub-results" class="sub-tab-content">
+      <div class="table-wrap">
+        <div class="table-header">
+          <h2>AIF Register <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:4px">ICAV-form, ICAV Act 2015</span> <span id="aifRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
+          <button class="export-btn" onclick="exportAifCSV()">Export CSV</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr>
+              <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
+            </tr></thead>
+            <tbody id="aifTableBody"></tbody>
         </table>
       </div>
-      <div class="pagination">
-        <button class="page-btn" onclick="changeAifPage(-1)">&larr; Prev</button>
-        <span class="page-info" id="aifPageInfo"></span>
-        <button class="page-btn" onclick="changeAifPage(1)">Next &rarr;</button>
+        <div class="pagination">
+          <button class="page-btn" onclick="changeAifPage(-1)">&larr; Prev</button>
+          <span class="page-info" id="aifPageInfo"></span>
+          <button class="page-btn" onclick="changeAifPage(1)">Next &rarr;</button>
+        </div>
       </div>
     </div>
   </main>
@@ -928,6 +950,17 @@ function switchTab(t) {
     leiLoaded = true;
     autoLoadRecentLEIs();
   }
+}
+
+function switchSubTab(tabId, sub) {
+  const subs = ['stats','results'];
+  document.querySelectorAll('#tab-' + tabId + ' .sub-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.sub === tabId + '-' + sub);
+  });
+  subs.forEach(s => {
+    const el = document.getElementById(tabId + '-sub-' + s);
+    if (el) el.classList.toggle('active', s === sub);
+  });
 }
 
 init();
