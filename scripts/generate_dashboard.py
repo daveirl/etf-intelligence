@@ -213,7 +213,7 @@ tr:hover td{background:var(--surface2)}
 <div class="lei-wrap">
   <div style="margin-bottom:20px">
     <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">LEI Lookup</h2>
-    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with the 10 most recently registered Irish fund LEIs (any registration status).</p>
+    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with the most recently registered UCITS ETF LEIs across the EU/EEA (any registration status). Paginate through history using the controls below.</p>
   </div>
   <div class="search-row">
     <input class="search-input" id="leiQuery" placeholder="Fund name, ManCo, or paste a 20-character LEI code directly&hellip;" />
@@ -242,6 +242,7 @@ tr:hover td{background:var(--surface2)}
   <div id="leiSection">
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px" id="leiSectionLabel">10 most recently authorised ETFs</div>
     <div id="leiResults"></div>
+    <div id="leiPager" style="display:none;justify-content:center;align-items:center;gap:14px;padding:18px 0;font-size:12px;color:var(--muted)"></div>
   </div>
 </div>
 </div>
@@ -351,6 +352,7 @@ const LEI_REGEX = /^[A-Z0-9]{18}[0-9]{2}$/;
 async function fetchLEI() {
   const q = document.getElementById('leiQuery').value.trim();
   if (!q) return;
+  document.getElementById('leiPager').style.display = 'none';
   setLeiLoading(true);
   document.getElementById('leiSectionLabel').textContent = 'Search results for "' + q + '"';
   try {
@@ -394,42 +396,114 @@ async function fetchLEI() {
   }
 }
 
-async function autoLoadRecentLEIs() {
-  setLeiLoading(true);
-  document.getElementById('leiSectionLabel').textContent = 'Loading 10 most recently registered Irish fund LEIs…';
+// GLEIF doesn't expose a reliable "name contains" filter on /lei-records,
+// so we fetch FUND-category LEIs sorted by registration date and filter
+// client-side to those whose legal name reads as a UCITS ETF. Filtered
+// records accumulate in leiCache so paging back doesn't refetch.
+const LEI_PAGE_SIZE        = 10;
+const LEI_SERVER_PAGE_SIZE = 100;
+const UCITS_ETF_RX = /\\bUCITS\\b[\\s\\S]*\\bETF\\b|\\bETF\\b[\\s\\S]*\\bUCITS\\b/i;
 
-  try {
-    // Query GLEIF directly for the 10 most recently registered Irish fund LEIs.
-    // No status filter — this surfaces PENDING_VALIDATION / PENDING_TRANSFER
-    // records as well as ISSUED ones, so newly minted LEIs show up immediately.
+let leiCache           = [];
+let leiServerCursor    = 1;
+let leiServerExhausted = false;
+let currentLEIPage     = 1;
+
+async function fillLEICache(targetCount) {
+  while (!leiServerExhausted && leiCache.length < targetCount) {
     const url = 'https://api.gleif.org/api/v1/lei-records' +
-      '?filter[entity.legalAddress.country]=IE' +
-      '&filter[entity.category]=FUND' +
+      '?filter[entity.category]=FUND' +
       '&sort=-registration.initialRegistrationDate' +
-      '&page[size]=10';
+      '&page[size]=' + LEI_SERVER_PAGE_SIZE +
+      '&page[number]=' + leiServerCursor;
     const resp = await fetch(url);
+    if (!resp.ok) throw new Error('GLEIF HTTP ' + resp.status);
     const data = await resp.json();
+    if (data.errors && data.errors.length) throw new Error(data.errors[0]?.title || 'GLEIF error');
     const records = data.data || [];
 
-    // Cross-reference each LEI with the CBI register by exact fund name.
+    for (const rec of records) {
+      const ln = rec.attributes?.entity?.legalName;
+      const nm = (typeof ln === 'string' ? ln : (ln?.name || ln?.value || '')) || '';
+      if (UCITS_ETF_RX.test(nm)) leiCache.push(rec);
+    }
+
+    const lastPage = data.meta?.pagination?.lastPage;
+    leiServerCursor++;
+    if (records.length === 0 || (lastPage && leiServerCursor > lastPage)) {
+      leiServerExhausted = true;
+    }
+  }
+}
+
+async function autoLoadRecentLEIs(page) {
+  page = Math.max(1, page || 1);
+  setLeiLoading(true);
+  document.getElementById('leiPager').style.display = 'none';
+  document.getElementById('leiSectionLabel').textContent = 'Loading UCITS ETF LEIs (page ' + page + ')…';
+
+  try {
+    // Want one extra record so we can tell whether a "next page" exists.
+    await fillLEICache(page * LEI_PAGE_SIZE + 1);
+
+    const start = (page - 1) * LEI_PAGE_SIZE;
+    const slice = leiCache.slice(start, start + LEI_PAGE_SIZE);
+
+    // Safety-net sort by registration date desc (in case GLEIF ignores `sort=`)
+    slice.sort((a, b) => {
+      const ad = a.attributes?.registration?.initialRegistrationDate || '';
+      const bd = b.attributes?.registration?.initialRegistrationDate || '';
+      return bd.localeCompare(ad);
+    });
+
+    // Cross-reference each LEI with the CBI register by exact fund name
     const cbiByName = {};
     for (const f of ALL_DATA) {
       if (f['Fund Name']) cbiByName[f['Fund Name'].toUpperCase()] = f;
     }
-    for (const rec of records) {
+    for (const rec of slice) {
       const ln = rec.attributes?.entity?.legalName;
       const nm = (typeof ln === 'string' ? ln : (ln?.name || ln?.value || '')) || '';
       const match = nm ? cbiByName[nm.toUpperCase()] : null;
       if (match) rec._cbi = match;
     }
 
-    document.getElementById('leiSectionLabel').textContent = '10 most recently registered Irish fund LEIs';
-    renderLEI(records, records.length);
+    currentLEIPage = page;
+    const hasMore = leiCache.length > start + LEI_PAGE_SIZE || !leiServerExhausted;
+    const totalKnown = leiServerExhausted ? leiCache.length : null;
+
+    document.getElementById('leiSectionLabel').textContent =
+      'UCITS ETF LEIs by registration date — page ' + currentLEIPage +
+      (totalKnown !== null
+        ? ' of ' + Math.max(1, Math.ceil(totalKnown / LEI_PAGE_SIZE)) + ' (' + totalKnown.toLocaleString() + ' total)'
+        : '');
+    renderLEI(slice, slice.length);
+    renderLEIPager(hasMore);
   } catch(e) {
     document.getElementById('leiResults').innerHTML = '<p style="color:#e05c2c">Error loading recent LEIs: ' + e.message + '</p>';
   } finally {
     setLeiLoading(false);
   }
+}
+
+function renderLEIPager(hasMore) {
+  const pager = document.getElementById('leiPager');
+  if (!pager) return;
+  pager.style.display = 'flex';
+  const prevDisabled = currentLEIPage <= 1;
+  const nextDisabled = !hasMore;
+  pager.innerHTML =
+    '<button class="quick-btn"' +
+      (prevDisabled
+        ? ' disabled style="opacity:0.4;cursor:not-allowed"'
+        : ' onclick="autoLoadRecentLEIs(' + (currentLEIPage - 1) + ')"') +
+      '>&larr; Newer</button>' +
+    '<span>Page ' + currentLEIPage + '</span>' +
+    '<button class="quick-btn"' +
+      (nextDisabled
+        ? ' disabled style="opacity:0.4;cursor:not-allowed"'
+        : ' onclick="autoLoadRecentLEIs(' + (currentLEIPage + 1) + ')"') +
+      '>Older &rarr;</button>';
 }
 
 function setLeiLoading(on) {

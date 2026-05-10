@@ -16,6 +16,16 @@ ADDRESS_NOISE = re.compile(
     re.IGNORECASE
 )
 
+# Common European corporate-suffix tokens at the end of a company name.
+# A string ending in one of these is a company even if it contains tokens
+# like "Ireland" / "Dublin" / "Quay" that the address heuristic would
+# otherwise flag (e.g. BLACKROCK ASSET MANAGEMENT IRELAND LIMITED).
+COMPANY_SUFFIX_RX = re.compile(
+    r"\b(?:limited|ltd|plc|gmbh|llp|llc|dac|inc|sarl|ag|nv|sa"
+    r"|s\.a\.?|n\.v\.?|s\.[aà]\.?\s*r\.?\s*l\.?)\b\.?\s*$",
+    re.IGNORECASE,
+)
+
 def standardize_date(date_str):
     for fmt in ("%d %b %Y", "%d-%b-%y", "%d %B %Y", "%d-%b-%Y", "%d %b %y"):
         try:
@@ -54,6 +64,10 @@ def looks_like_address(text):
     text = text.strip()
     if not text:
         return True
+    # If it ends in a corporate suffix it's a company, regardless of any
+    # address-like tokens it contains (e.g. "...IRELAND LIMITED").
+    if COMPANY_SUFFIX_RX.search(text):
+        return False
     # Pure address indicators
     if re.match(r"^\d+", text):           # starts with number = street number
         return True
