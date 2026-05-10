@@ -79,7 +79,8 @@ def looks_like_address(text):
     if re.match(r"^d\d{2}\s", text, re.I): # Dublin postcode e.g. D02 FT59
         return True
     keywords = ["floor", "quay", "road", "street", "place", "house", "court",
-                "square", "avenue", "lane", "dock", "park", " dublin", "ireland"]
+                "square", "avenue", "lane", "dock", "park", "centre", "center",
+                "ifsc", " dublin", "ireland"]
     lower = text.lower()
     if any(k in lower for k in keywords):
         return True
