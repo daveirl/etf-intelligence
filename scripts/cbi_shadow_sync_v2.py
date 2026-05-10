@@ -129,6 +129,7 @@ def parse_pdf_text(pdf_bytes):
     records = []
     current_manco = ""
     current_trustee = ""
+    current_umbrella = ""
     seen = set()
 
     for line in text.split("\n"):
@@ -160,16 +161,21 @@ def parse_pdf_text(pdf_bytes):
         manco_candidate  = after_parts[0] if len(after_parts) > 0 else ""
         trustee_candidate = after_parts[1] if len(after_parts) > 1 else ""
 
-        if looks_like_company(manco_candidate):
-            # This is an umbrella line — update current ManCo/Trustee
-            current_manco   = manco_candidate
-            current_trustee = trustee_candidate if looks_like_company(trustee_candidate) else ""
+        is_umbrella = looks_like_company(manco_candidate)
+        if is_umbrella:
+            # Umbrella line — update current ManCo/Trustee/Umbrella name
+            current_manco    = manco_candidate
+            current_trustee  = trustee_candidate if looks_like_company(trustee_candidate) else ""
+            current_umbrella = fund_name
 
-        # Record this fund (umbrella or sub-fund)
+        # Record this fund (umbrella or sub-fund). Umbrella column is empty
+        # for the umbrella row itself and set to the umbrella name for any
+        # sub-funds beneath it.
         if fund_name not in seen:
             seen.add(fund_name)
             records.append({
                 "Fund Name":  fund_name,
+                "Umbrella":   "" if is_umbrella else current_umbrella,
                 "ManCo":      current_manco,
                 "Depositary": current_trustee,
                 "Auth_Date":  date_str,
@@ -209,7 +215,7 @@ def run_sync():
         if r["Fund Name"] in first_seen_map and first_seen_map[r["Fund Name"]]:
             r["First_Seen"] = first_seen_map[r["Fund Name"]]
 
-    df = pd.DataFrame(records, columns=["Fund Name", "ManCo", "Depositary", "Auth_Date", "First_Seen"])
+    df = pd.DataFrame(records, columns=["Fund Name", "Umbrella", "ManCo", "Depositary", "Auth_Date", "First_Seen"])
     df["Auth_Date_DT"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
     df = df.sort_values("Auth_Date_DT", ascending=False).drop(columns=["Auth_Date_DT"])
 

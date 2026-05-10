@@ -33,8 +33,11 @@ jobs:
           pip install --upgrade pip
           pip install requests beautifulsoup4 pandas pdfplumber
 
-      - name: Run CBI sync
+      - name: Run CBI fund sync
         run: python scripts/cbi_shadow_sync_v2.py
+
+      - name: Run CBI ICAV sync
+        run: python scripts/icav_sync.py
 
       - name: Generate dashboard
         run: python scripts/generate_dashboard.py
@@ -43,7 +46,7 @@ jobs:
         run: |
           git config user.name  "etf-intelligence-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add data/cbi_shadow_db.csv docs/index.html
+          git add data/cbi_shadow_db.csv data/icav_db.csv docs/index.html
           git diff --staged --quiet && exit 0
           git commit -m "chore: weekly sync $(date +'%Y-%m-%d')"
           # Rebase onto whatever has landed on main while the sync ran,
