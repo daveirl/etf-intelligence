@@ -72,6 +72,8 @@ tr:hover td{background:var(--surface2)}
 .lei-status-badge{font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .issued{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
 .lapsed{background:#e05c2c22;color:#e05c2c;border:1px solid #e05c2c44}
+.pending{background:#f0b42922;color:var(--accent);border:1px solid #f0b42944}
+.other-status{background:#88888822;color:var(--muted);border:1px solid #88888844}
 .lei-card-body{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
 .lei-field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:block;margin-bottom:3px}
 .lei-field span{font-size:12px;color:var(--text)}
@@ -89,7 +91,7 @@ tr:hover td{background:var(--surface2)}
 <body>
 <header class="header">
   <div class="logo"><div class="logo-dot"></div>ETF <span>Intelligence</span></div>
-  <div class="header-meta">CBI Register &middot; Updated 2026-05-08</div>
+  <div class="header-meta">CBI Register &middot; Updated 2026-05-09</div>
 </header>
 <div class="tabs">
   <div class="tab active" onclick="switchTab('cbi')">CBI Register</div>
@@ -166,7 +168,7 @@ tr:hover td{background:var(--surface2)}
 <div class="lei-wrap">
   <div style="margin-bottom:20px">
     <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">LEI Lookup</h2>
-    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with LEI details for the 10 most recently authorised ETFs.</p>
+    <p style="font-size:12px;color:var(--muted)">Live data from the GLEIF database. Page loads with the 10 most recently registered Irish fund LEIs (any registration status).</p>
   </div>
   <div class="search-row">
     <input class="search-input" id="leiQuery" placeholder="Fund name, ManCo, or paste a 20-character LEI code directly&hellip;" />
@@ -209,7 +211,7 @@ const PER_PAGE = 50;
 let filtered = [...ALL_DATA];
 let page = 1;
 let activeFilter = 'all';
-const today = new Date('2026-05-08');
+const today = new Date('2026-05-09');
 
 function init() {
   const mancos = [...new Set(ALL_DATA.map(r=>r.ManCo).filter(Boolean))].sort();
@@ -276,7 +278,7 @@ function exportCSV() {
   )];
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([rows.join('\n')], {type:'text/csv'}));
-  a.download = 'cbi_register_2026-05-08.csv';
+  a.download = 'cbi_register_2026-05-09.csv';
   a.click();
 }
 
@@ -347,67 +349,42 @@ async function fetchLEI() {
   }
 }
 
-async function autoLoadRecentETFs() {
+async function autoLoadRecentLEIs() {
   setLeiLoading(true);
-  document.getElementById('leiSectionLabel').textContent = 'Loading 10 most recently authorised UCITS ETFs…';
+  document.getElementById('leiSectionLabel').textContent = 'Loading 10 most recently registered Irish fund LEIs…';
 
-  // Get last 10 funds with "UCITS ETF" in name, sorted most recent first
-  const recentETFs = ALL_DATA
-    .filter(r => r['Fund Name'] && r['Fund Name'].toUpperCase().includes('UCITS ETF'))
-    .slice(0, 10);
+  try {
+    // Query GLEIF directly for the 10 most recently registered Irish fund LEIs.
+    // No status filter — this surfaces PENDING_VALIDATION / PENDING_TRANSFER
+    // records as well as ISSUED ones, so newly minted LEIs show up immediately.
+    const url = 'https://api.gleif.org/api/v1/lei-records' +
+      '?filter[entity.legalAddress.country]=IE' +
+      '&filter[entity.category]=FUND' +
+      '&sort=-registration.initialRegistrationDate' +
+      '&page[size]=10';
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const records = data.data || [];
 
-  const results = [];
-  for (const fund of recentETFs) {
-    // Start with a synthetic record from CBI data so all 10 always show
-    const syntheticRecord = {
-      id: null,
-      _cbi: fund,
-      _synthetic: true,
-      attributes: {
-        entity: {
-          legalName: fund['Fund Name'],
-          legalAddress: { country: 'IE', city: '' },
-          entityCategory: 'FUND',
-          jurisdiction: 'IE'
-        },
-        registration: { status: 'ISSUED' }
-      }
-    };
-
-    try {
-      // Try exact name search
-      const url = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(fund['Fund Name']) + '&page[size]=5';
-      const data = await (await fetch(url)).json();
-      let hit = (data.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
-
-      // Fallback: strip suffix after last dash/bracket and retry
-      if (!hit) {
-        const shortName = fund['Fund Name']
-          .replace(/\s+[A-Z]{3}\s+(Acc|Dist|Hdg|H).*$/i, '')
-          .replace(/\s*\(.*\)\s*$/, '')
-          .trim();
-        if (shortName && shortName !== fund['Fund Name']) {
-          const url2 = 'https://api.gleif.org/api/v1/lei-records?filter[entity.legalName]=' + encodeURIComponent(shortName) + '&page[size]=5';
-          const data2 = await (await fetch(url2)).json();
-          hit = (data2.data || []).find(r => EU_EEA.has(r.attributes?.entity?.legalAddress?.country || ''));
-        }
-      }
-
-      if (hit) {
-        hit._cbi = fund;
-        results.push(hit);
-      } else {
-        // No GLEIF match — show CBI data only
-        results.push(syntheticRecord);
-      }
-    } catch(e) {
-      results.push(syntheticRecord);
+    // Cross-reference each LEI with the CBI register by exact fund name.
+    const cbiByName = {};
+    for (const f of ALL_DATA) {
+      if (f['Fund Name']) cbiByName[f['Fund Name'].toUpperCase()] = f;
     }
-  }
+    for (const rec of records) {
+      const ln = rec.attributes?.entity?.legalName;
+      const nm = (typeof ln === 'string' ? ln : (ln?.name || ln?.value || '')) || '';
+      const match = nm ? cbiByName[nm.toUpperCase()] : null;
+      if (match) rec._cbi = match;
+    }
 
-  document.getElementById('leiSectionLabel').textContent = '10 most recently authorised UCITS ETFs';
-  renderLEI(results, results.length);
-  setLeiLoading(false);
+    document.getElementById('leiSectionLabel').textContent = '10 most recently registered Irish fund LEIs';
+    renderLEI(records, records.length);
+  } catch(e) {
+    document.getElementById('leiResults').innerHTML = '<p style="color:#e05c2c">Error loading recent LEIs: ' + e.message + '</p>';
+  } finally {
+    setLeiLoading(false);
+  }
 }
 
 function setLeiLoading(on) {
@@ -428,12 +405,12 @@ function renderLEI(records, total) {
     const laddr  = entity.legalAddress || {};
     const raddr  = entity.registeredAddress || {};
 
-    // Name: GLEIF returns legalName as {value, language} object OR plain string
+    // Name: GLEIF returns legalName as {name, language} object OR plain string
     const legalNameRaw = entity.legalName;
     const name = (typeof legalNameRaw === 'string')
       ? legalNameRaw
-      : (legalNameRaw?.value || r.id || 'Unknown');
-    const otherNames  = (entity.otherNames || []).map(n => n.value || n).filter(Boolean);
+      : (legalNameRaw?.name || legalNameRaw?.value || r.id || 'Unknown');
+    const otherNames  = (entity.otherNames || []).map(n => n?.name || n?.value || n).filter(s => typeof s === 'string' && s);
     const lei         = r.id || '';
     const country     = laddr.country || '';
     const city        = laddr.city || '';
@@ -441,7 +418,12 @@ function renderLEI(records, total) {
     const legalForm   = entity.legalForm?.id || '';
     const category    = entity.entityCategory || '';
     const subCategory = entity.entitySubCategory || '';
-    const status      = (reg.status || '').toLowerCase() === 'issued' ? 'issued' : 'lapsed';
+    const rawStatus   = (reg.status || '').toUpperCase();
+    const statusLabel = rawStatus.replace(/_/g, ' ') || 'UNKNOWN';
+    const statusClass = rawStatus === 'ISSUED' ? 'issued'
+      : rawStatus === 'LAPSED' ? 'lapsed'
+      : rawStatus.startsWith('PENDING') ? 'pending'
+      : 'other-status';
     const registered  = (reg.initialRegistrationDate || '').substring(0, 10);
     const lastUpdate  = (reg.lastUpdateDate || '').substring(0, 10);
     const nextRenewal = (reg.nextRenewalDate || '').substring(0, 10);
@@ -499,7 +481,7 @@ function renderLEI(records, total) {
             (subCategory ? ' / ' + subCategory : '') +
           '</div>' +
         '</div>' +
-        '<span class="lei-status-badge ' + status + '">' + status.toUpperCase() + '</span>' +
+        '<span class="lei-status-badge ' + statusClass + '">' + statusLabel + '</span>' +
       '</div>' +
       // Body: key fields in grid
       '<div class="lei-card-body">' +
@@ -538,7 +520,7 @@ function switchTab(t) {
   document.getElementById('tab-lei').classList.toggle('active',t==='lei');
   if (t === 'lei' && !leiLoaded) {
     leiLoaded = true;
-    autoLoadRecentETFs();
+    autoLoadRecentLEIs();
   }
 }
 
