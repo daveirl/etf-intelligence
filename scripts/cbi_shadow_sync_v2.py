@@ -177,13 +177,22 @@ def parse_pdf_text(pdf_bytes):
 
         # Detect umbrella line: after_date contains company-looking text
         manco_candidate  = after_parts[0] if len(after_parts) > 0 else ""
-        trustee_candidate = after_parts[1] if len(after_parts) > 1 else ""
+        # Trustee/Depositary: pick the *last* company-looking column among
+        # after_parts[1:]. UCITS rows put Trustee at [1] directly; AIF rows
+        # have an extra "Internally Managed" Yes/No flag and (sometimes) an
+        # empty Management Company column between AIFM and Depositary, so
+        # the depositary lives further out.
+        trustee_candidate = ""
+        for cand in reversed(after_parts[1:]):
+            if looks_like_company(cand):
+                trustee_candidate = cand
+                break
 
         is_umbrella = looks_like_company(manco_candidate)
         if is_umbrella:
             # Umbrella line — update current ManCo/Trustee/Umbrella name
             current_manco    = manco_candidate
-            current_trustee  = trustee_candidate if looks_like_company(trustee_candidate) else ""
+            current_trustee  = trustee_candidate
             current_umbrella = fund_name
 
         # Record this fund (umbrella or sub-fund). Umbrella column is empty
