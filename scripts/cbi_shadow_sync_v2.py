@@ -19,10 +19,12 @@ ADDRESS_NOISE = re.compile(
 # Common European corporate-suffix tokens at the end of a company name.
 # A string ending in one of these is a company even if it contains tokens
 # like "Ireland" / "Dublin" / "Quay" that the address heuristic would
-# otherwise flag (e.g. BLACKROCK ASSET MANAGEMENT IRELAND LIMITED).
+# otherwise flag (e.g. BLACKROCK ASSET MANAGEMENT IRELAND LIMITED, or
+# J.P. MORGAN SE DUBLIN BRANCH for branches of foreign banks).
 COMPANY_SUFFIX_RX = re.compile(
-    r"\b(?:limited|ltd|plc|gmbh|llp|llc|dac|inc|sarl|ag|nv|sa"
-    r"|s\.a\.?|n\.v\.?|s\.[aà]\.?\s*r\.?\s*l\.?)\b\.?\s*$",
+    r"\b(?:limited|ltd|plc|gmbh|llp|llc|dac|inc|sarl|ag|nv|sa|se"
+    r"|s\.a\.?|n\.v\.?|s\.[aà]\.?\s*r\.?\s*l\.?"
+    r"|(?:dublin\s+)?branch)\b\.?\s*$",
     re.IGNORECASE,
 )
 
@@ -88,6 +90,12 @@ def looks_like_company(text):
     text = text.strip()
     if len(text) < 5:
         return False
+    # Anything ending in a corporate suffix (Limited / Ltd / Plc / DAC /
+    # SE / Branch / S.A. / etc.) is a company, even if its name otherwise
+    # contains zero of the keyword indicators below (e.g. "J.P. Morgan SE
+    # Dublin Branch" has no "Bank" / "Capital" / "Asset" token).
+    if COMPANY_SUFFIX_RX.search(text):
+        return True
     if looks_like_address(text):
         return False
     indicators = ["limited", "ltd", "plc", "s.a", "gmbh", "llp", "management",
@@ -136,8 +144,14 @@ def parse_pdf_text(pdf_bytes):
     seen = set()
 
     for line in text.split("\n"):
-        # Skip headers, footers, page markers
-        if re.search(r"Run Date:|Page \d+ of \d+|Name of UCITS|Date of|Authorisation|Management Company|Trustee", line):
+        # Skip the "Run Date" footer (which carries a date pattern that would
+        # otherwise be parsed as a fund) and page markers. Header rows have
+        # no date pattern in them and are filtered by the date check below,
+        # so we don't need to enumerate "Trustee" / "Management Company" /
+        # etc. — and shouldn't, because real trustees like "SMT Trustees
+        # (Ireland) Limited" contain those substrings and used to silently
+        # drop entire umbrella rows from the parse.
+        if re.search(r"Run Date:|Page \d+ of \d+", line):
             continue
         if not line.strip():
             continue

@@ -112,14 +112,26 @@ def build_html(df, aif_df, icav_df):
     icav_data_js     = json.dumps(icav_records, separators=(",", ":"))
 
     # Top ManCos by ETF count
-    manco_counts = df_etf[df_etf["ManCo"] != ""].groupby("ManCo").size().sort_values(ascending=False).head(8)
+    manco_counts = df[df["ManCo"] != ""].groupby("ManCo").size().sort_values(ascending=False).head(8)
     manco_labels = json.dumps(list(manco_counts.index))
     manco_values = json.dumps(list(manco_counts.values.tolist()))
 
-    # Top depositaries
-    dep_counts = df_etf[df_etf["Depositary"] != ""].groupby("Depositary").size().sort_values(ascending=False).head(6)
+    # Top depositaries (all funds, not ETF-only)
+    dep_counts = df[df["Depositary"] != ""].groupby("Depositary").size().sort_values(ascending=False).head(6)
     dep_labels = json.dumps(list(dep_counts.index))
     dep_values = json.dumps(list(dep_counts.values.tolist()))
+
+    # Authorisations by year, split ETF vs non-ETF, for the stacked bar chart.
+    yr_series = df["Auth_Date"].astype(str).str.slice(0, 4)
+    by_year = df.assign(_yr=yr_series)
+    by_year = by_year[by_year["_yr"].str.fullmatch(r"\d{4}", na=False)]
+    by_year["_yr"] = by_year["_yr"].astype(int)
+    yr_grouped = by_year.groupby("_yr")["is_etf"].agg(["sum", "count"])
+    yr_grouped["non_etf"] = yr_grouped["count"] - yr_grouped["sum"]
+    yr_grouped = yr_grouped.sort_index()
+    year_labels  = json.dumps([int(y) for y in yr_grouped.index])
+    year_etf     = json.dumps([int(v) for v in yr_grouped["sum"].values])
+    year_non_etf = json.dumps([int(v) for v in yr_grouped["non_etf"].values])
 
     return """<!DOCTYPE html>
 <html lang="en">
@@ -164,9 +176,11 @@ select:focus,input:focus{border-color:var(--accent)}
 .chart-card h3{font-size:13px;font-weight:600;margin-bottom:14px}
 .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:7px}
 .bar-label{font-size:11px;color:var(--muted);width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
-.bar-track{flex:1;background:var(--surface2);border-radius:3px;height:8px}
-.bar-fill{height:8px;border-radius:3px;transition:.4s}
-.bar-count{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;width:30px;text-align:right}
+.bar-track{flex:1;background:var(--surface2);border-radius:3px;height:8px;display:flex;overflow:hidden}
+.bar-fill{height:8px;border-radius:0;transition:.4s}
+.bar-count{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;width:60px;text-align:right;white-space:nowrap}
+.year-legend{display:flex;gap:14px;margin-bottom:10px;font-size:11px;color:var(--muted)}
+.year-legend .swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .mono-date{font-family:'DM Mono',monospace;font-size:12px}
 .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .table-header{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
@@ -268,8 +282,11 @@ tr:hover td{background:var(--surface2)}
       <div class="stat"><div class="stat-val">""" + str(ytd) + """</div><div class="stat-lbl">ETFs YTD """ + str(now.year) + """</div></div>
     </div>
     <div class="charts-row">
-      <div class="chart-card"><h3>Top Management Companies (ETFs)</h3><div id="mancoChart"></div></div>
-      <div class="chart-card"><h3>Depositary Market Share (ETFs)</h3><div id="depChart"></div></div>
+      <div class="chart-card"><h3>Top Management Companies</h3><div id="mancoChart"></div></div>
+      <div class="chart-card"><h3>Depositary Market Share</h3><div id="depChart"></div></div>
+    </div>
+    <div class="charts-row" style="grid-template-columns:1fr">
+      <div class="chart-card"><h3>Authorisations by Year (ETF vs non-ETF)</h3><div id="yearChart"></div></div>
     </div>
     <div class="table-wrap">
       <div class="table-header">
@@ -332,8 +349,8 @@ tr:hover td{background:var(--surface2)}
       <div class="stat"><div class="stat-val">""" + str(aif_ytd) + """</div><div class="stat-lbl">YTD """ + str(now.year) + """</div></div>
     </div>
     <div class="charts-row">
-      <div class="chart-card"><h3>Top Management Companies (AIFs)</h3><div id="aifMancoChart"></div></div>
-      <div class="chart-card"><h3>Depositary Market Share (AIFs)</h3><div id="aifDepChart"></div></div>
+      <div class="chart-card"><h3>Top Management Companies</h3><div id="aifMancoChart"></div></div>
+      <div class="chart-card"><h3>Depositary Market Share</h3><div id="aifDepChart"></div></div>
     </div>
     <div class="table-wrap">
       <div class="table-header">
@@ -455,6 +472,9 @@ const MANCO_LABELS = """ + manco_labels + """;
 const MANCO_VALUES = """ + manco_values + """;
 const DEP_LABELS   = """ + dep_labels + """;
 const DEP_VALUES   = """ + dep_values + """;
+const YEAR_LABELS  = """ + year_labels + """;
+const YEAR_ETF     = """ + year_etf + """;
+const YEAR_NON_ETF = """ + year_non_etf + """;
 const PER_PAGE = 50;
 let filtered = [...ALL_DATA];
 let page = 1;
@@ -544,6 +564,34 @@ function buildCharts() {
     '<div class="bar-track"><div class="bar-fill" style="width:'+(DEP_VALUES[i]/maxD*100).toFixed(1)+'%;background:var(--green)"></div></div>' +
     '<div class="bar-count">'+DEP_VALUES[i]+'</div></div>'
   ).join('');
+
+  // Authorisations by year — stacked ETF / non-ETF
+  if (YEAR_LABELS.length) {
+    const maxY = Math.max(...YEAR_LABELS.map((_, i) => YEAR_ETF[i] + YEAR_NON_ETF[i]));
+    const legend =
+      '<div class="year-legend">' +
+        '<span><span class="swatch" style="background:var(--accent)"></span>ETFs</span>' +
+        '<span><span class="swatch" style="background:var(--green)"></span>Non-ETFs</span>' +
+      '</div>';
+    const rows = YEAR_LABELS.map((label, i) => {
+      const etf    = YEAR_ETF[i] || 0;
+      const nonEtf = YEAR_NON_ETF[i] || 0;
+      const total  = etf + nonEtf;
+      const etfPct    = (etf    / maxY * 100).toFixed(2);
+      const nonEtfPct = (nonEtf / maxY * 100).toFixed(2);
+      return '<div class="bar-row">' +
+        '<div class="bar-label" style="width:50px">' + label + '</div>' +
+        '<div class="bar-track">' +
+          (nonEtf ? '<div class="bar-fill" style="width:' + nonEtfPct + '%;background:var(--green)" title="' + nonEtf + ' non-ETFs"></div>' : '') +
+          (etf    ? '<div class="bar-fill" style="width:' + etfPct + '%;background:var(--accent)" title="' + etf + ' ETFs"></div>'    : '') +
+        '</div>' +
+        '<div class="bar-count" title="' + etf + ' ETFs / ' + nonEtf + ' non-ETFs">' +
+          total + (etf ? ' (' + etf + ' ETF)' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+    document.getElementById('yearChart').innerHTML = legend + rows;
+  }
 }
 
 // ─── AIF register tab (ICAV-form AIFs) ──────────────────────────────
