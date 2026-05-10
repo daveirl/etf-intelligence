@@ -8,13 +8,15 @@ No guessing — uses ManCo and Depositary exactly as parsed from the CBI PDF.
 import pandas as pd
 import json
 import os
+import re
 from datetime import date
 
-CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "cbi_shadow_db.csv")
-HTML_OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "index.html")
-TODAY    = date.today().isoformat()
+CSV_PATH      = os.path.join(os.path.dirname(__file__), "..", "data", "cbi_shadow_db.csv")
+ICAV_CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "icav_db.csv")
+HTML_OUT      = os.path.join(os.path.dirname(__file__), "..", "docs", "index.html")
+TODAY         = date.today().isoformat()
 
-def build_html(df):
+def build_html(df, icav_df):
     df["is_etf"] = df["Fund Name"].str.contains("ETF", case=False, na=False)
     df["Auth_Date"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
     now = pd.Timestamp(TODAY)
@@ -29,9 +31,49 @@ def build_html(df):
     df["Auth_Date"] = df["Auth_Date"].dt.strftime("%Y-%m-%d").fillna("")
     df["ManCo"]      = df.get("ManCo", pd.Series([""] * len(df))).fillna("")
     df["Depositary"] = df.get("Depositary", pd.Series([""] * len(df))).fillna("")
+    df["Umbrella"]   = df.get("Umbrella",   pd.Series([""] * len(df))).fillna("")
 
     records = df[["Fund Name", "ManCo", "Depositary", "Auth_Date", "is_etf"]].fillna("").to_dict(orient="records")
     data_js = json.dumps(records, separators=(",", ":"))
+
+    # ─── ICAV register ────────────────────────────────────────────────
+    # Match ICAVs to fund-register umbrellas (case-insensitive, exact).
+    subfund_counts = (
+        df[df["Umbrella"].str.strip() != ""]
+        .assign(_key=lambda d: d["Umbrella"].str.upper().str.strip())
+        .groupby("_key")
+        .size()
+        .to_dict()
+    )
+
+    icav_df = icav_df.copy()
+    icav_df["ICAV Name"] = icav_df["ICAV Name"].fillna("").astype(str)
+    icav_df["Reg Date"]  = pd.to_datetime(icav_df["Reg Date"], errors="coerce")
+    icav_df = icav_df.sort_values("Reg Date", ascending=False, na_position="last")
+    icav_df["Reg Date"]  = icav_df["Reg Date"].dt.strftime("%Y-%m-%d").fillna("")
+    icav_df["Reg Number"]      = icav_df.get("Reg Number",     pd.Series([""] * len(icav_df))).fillna("")
+    icav_df["In Liquidation"]  = icav_df.get("In Liquidation", pd.Series([""] * len(icav_df))).fillna("")
+    icav_df["ETF Related"]     = icav_df.get("ETF Related",    pd.Series([""] * len(icav_df))).fillna("")
+
+    icav_records = []
+    for _, row in icav_df.iterrows():
+        name = row["ICAV Name"].strip()
+        # Strip trailing "(in Liquidation)" for the match key only — display keeps it
+        match_key = re.sub(r"\s*\(in Liquidation\)\s*$", "", name, flags=re.I).upper().strip()
+        icav_records.append({
+            "name":        name,
+            "reg_date":    row["Reg Date"],
+            "reg_number":  row["Reg Number"],
+            "in_liq":      str(row["In Liquidation"]).strip().lower() == "yes",
+            "etf":         str(row["ETF Related"]).strip().lower() == "yes",
+            "sub_count":   int(subfund_counts.get(match_key, 0)),
+        })
+
+    icav_total       = len(icav_records)
+    icav_no_subs     = sum(1 for r in icav_records if r["sub_count"] == 0 and not r["in_liq"])
+    icav_etf_related = sum(1 for r in icav_records if r["etf"])
+    icav_in_liq      = sum(1 for r in icav_records if r["in_liq"])
+    icav_data_js     = json.dumps(icav_records, separators=(",", ":"))
 
     # Top ManCos by ETF count
     manco_counts = df_etf[df_etf["ManCo"] != ""].groupby("ManCo").size().sort_values(ascending=False).head(8)
@@ -48,7 +90,7 @@ def build_html(df):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ETF Intelligence — CBI Register</title>
+<title>ETF Intelligence — CBI Fund &amp; ICAV Registers</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0d1117;--surface:#161b22;--surface2:#1c2330;--border:#30363d;--accent:#f0b429;--green:#3fb950;--text:#e6edf3;--muted:#8b949e}
@@ -67,8 +109,13 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;fon
 .sidebar{background:var(--surface);border-right:1px solid var(--border);padding:20px;display:flex;flex-direction:column;gap:16px}
 .sidebar h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
 .filter-group{display:flex;flex-direction:column;gap:6px}
-.filter-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;text-align:left;transition:.15s}
-.filter-btn:hover,.filter-btn.active{border-color:var(--accent);color:var(--accent)}
+.filter-btn,.icav-filter-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;text-align:left;transition:.15s;width:100%}
+.filter-btn:hover,.filter-btn.active,.icav-filter-btn:hover,.icav-filter-btn.active{border-color:var(--accent);color:var(--accent)}
+.icav-badge{display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;letter-spacing:.02em}
+.icav-badge.has-subs{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
+.icav-badge.no-subs{background:#f0b42922;color:var(--accent);border:1px solid #f0b42944}
+.icav-badge.in-liq{background:#e05c2c22;color:#e05c2c;border:1px solid #e05c2c44}
+tr.icav-no-subs td:first-child{border-left:2px solid var(--accent)}
 select,input[type=date],input[type=text]{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font-size:12px;width:100%;outline:none}
 select:focus,input:focus{border-color:var(--accent)}
 .main{padding:24px;overflow:auto}
@@ -136,10 +183,11 @@ tr:hover td{background:var(--surface2)}
 <body>
 <header class="header">
   <div class="logo"><div class="logo-dot"></div>ETF <span>Intelligence</span></div>
-  <div class="header-meta">CBI Register &middot; Updated """ + TODAY + """</div>
+  <div class="header-meta">CBI Fund &amp; ICAV Registers &middot; Updated """ + TODAY + """</div>
 </header>
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('cbi')">CBI Register</div>
+  <div class="tab active" onclick="switchTab('cbi')">CBI Fund Register</div>
+  <div class="tab" onclick="switchTab('icav')">CBI ICAV Register</div>
   <div class="tab" onclick="switchTab('lei')">LEI Lookup</div>
 </div>
 
@@ -203,6 +251,59 @@ tr:hover td{background:var(--surface2)}
         <button class="page-btn" onclick="changePage(-1)">&larr; Prev</button>
         <span class="page-info" id="pageInfo"></span>
         <button class="page-btn" onclick="changePage(1)">Next &rarr;</button>
+      </div>
+    </div>
+  </main>
+</div>
+</div>
+
+<div id="tab-icav" class="tab-content">
+<div class="layout">
+  <aside class="sidebar">
+    <div class="filter-group">
+      <h3>Status</h3>
+      <button class="icav-filter-btn active" onclick="setIcavFilter('all',this)">All ICAVs</button>
+      <button class="icav-filter-btn" onclick="setIcavFilter('nosubs',this)">No Sub-funds Yet</button>
+      <button class="icav-filter-btn" onclick="setIcavFilter('etf',this)">ETF-Related</button>
+      <button class="icav-filter-btn" onclick="setIcavFilter('liq',this)">In Liquidation</button>
+    </div>
+    <div class="filter-group">
+      <h3>Reg Date From</h3>
+      <input type="date" id="icavDFrom" onchange="applyIcavFilters()">
+    </div>
+    <div class="filter-group">
+      <h3>Reg Date To</h3>
+      <input type="date" id="icavDTo" onchange="applyIcavFilters()">
+    </div>
+    <div class="filter-group">
+      <h3>Search</h3>
+      <input type="text" id="icavSearch" placeholder="ICAV name&hellip;" oninput="applyIcavFilters()">
+    </div>
+  </aside>
+  <main class="main">
+    <div class="stats-row">
+      <div class="stat"><div class="stat-val">""" + str(icav_total) + """</div><div class="stat-lbl">Total ICAVs</div></div>
+      <div class="stat"><div class="stat-val">""" + str(icav_no_subs) + """</div><div class="stat-lbl">No Sub-funds Yet</div></div>
+      <div class="stat"><div class="stat-val">""" + str(icav_etf_related) + """</div><div class="stat-lbl">ETF-Related</div></div>
+      <div class="stat"><div class="stat-val">""" + str(icav_in_liq) + """</div><div class="stat-lbl">In Liquidation</div></div>
+    </div>
+    <div class="table-wrap">
+      <div class="table-header">
+        <h2>ICAV Register <span id="icavRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
+        <button class="export-btn" onclick="exportIcavCSV()">Export CSV</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>ICAV Name</th><th>Reg Date</th><th>Reg #</th><th style="text-align:right">Sub-funds</th><th>Status</th>
+          </tr></thead>
+          <tbody id="icavTableBody"></tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <button class="page-btn" onclick="changeIcavPage(-1)">&larr; Prev</button>
+        <span class="page-info" id="icavPageInfo"></span>
+        <button class="page-btn" onclick="changeIcavPage(1)">Next &rarr;</button>
       </div>
     </div>
   </main>
@@ -343,6 +444,76 @@ function buildCharts() {
     '<div class="bar-count">'+DEP_VALUES[i]+'</div></div>'
   ).join('');
 }
+
+// ─── ICAV register tab ──────────────────────────────────────────────
+const ICAV_DATA = """ + icav_data_js + """;
+const ICAV_PAGE_SIZE = 50;
+let icavFilter   = 'all';
+let icavFiltered = ICAV_DATA;
+let icavPage     = 1;
+
+function setIcavFilter(val, btn) {
+  document.querySelectorAll('.icav-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  icavFilter = val;
+  icavPage = 1;
+  applyIcavFilters();
+}
+
+function applyIcavFilters() {
+  const dFrom  = document.getElementById('icavDFrom').value;
+  const dTo    = document.getElementById('icavDTo').value;
+  const search = document.getElementById('icavSearch').value.toLowerCase();
+  icavFiltered = ICAV_DATA.filter(r => {
+    if (icavFilter === 'nosubs' && (r.sub_count > 0 || r.in_liq)) return false;
+    if (icavFilter === 'etf'    && !r.etf)    return false;
+    if (icavFilter === 'liq'    && !r.in_liq) return false;
+    if (dFrom && r.reg_date && r.reg_date < dFrom) return false;
+    if (dTo   && r.reg_date && r.reg_date > dTo)   return false;
+    if (search && !r.name.toLowerCase().includes(search)) return false;
+    return true;
+  });
+  renderIcavTable();
+}
+
+function renderIcavTable() {
+  const start = (icavPage - 1) * ICAV_PAGE_SIZE;
+  const rows  = icavFiltered.slice(start, start + ICAV_PAGE_SIZE);
+  document.getElementById('icavRowCount').textContent = '(' + icavFiltered.length.toLocaleString() + ' ICAVs)';
+  document.getElementById('icavPageInfo').textContent  = 'Page ' + icavPage + ' of ' + (Math.ceil(icavFiltered.length / ICAV_PAGE_SIZE) || 1);
+  document.getElementById('icavTableBody').innerHTML = rows.map(r => {
+    let badgeClass, badgeText;
+    if (r.in_liq)             { badgeClass = 'in-liq';   badgeText = 'In Liquidation'; }
+    else if (r.sub_count > 0) { badgeClass = 'has-subs'; badgeText = r.sub_count + ' sub-fund' + (r.sub_count === 1 ? '' : 's'); }
+    else                      { badgeClass = 'no-subs';  badgeText = 'No sub-funds yet'; }
+    const rowClass = (!r.in_liq && r.sub_count === 0) ? ' class="icav-no-subs"' : '';
+    return '<tr' + rowClass + '><td>' + r.name + (r.etf ? ' <span class="etf-badge">ETF</span>' : '') + '</td>' +
+      '<td class="mono-date">' + (r.reg_date || '') + '</td>' +
+      '<td class="mono-date">' + (r.reg_number || '') + '</td>' +
+      '<td style="text-align:right;font-family:\\'DM Mono\\',monospace">' + r.sub_count + '</td>' +
+      '<td><span class="icav-badge ' + badgeClass + '">' + badgeText + '</span></td></tr>';
+  }).join('');
+}
+
+function changeIcavPage(d) {
+  const max = Math.ceil(icavFiltered.length / ICAV_PAGE_SIZE) || 1;
+  icavPage = Math.max(1, Math.min(max, icavPage + d));
+  renderIcavTable();
+}
+
+function exportIcavCSV() {
+  const cols = ['name','reg_date','reg_number','sub_count','in_liq','etf'];
+  const headers = ['ICAV Name','Reg Date','Reg Number','Sub-fund Count','In Liquidation','ETF Related'];
+  const rows = [headers.join(','), ...icavFiltered.map(r =>
+    cols.map(c => '"' + String(r[c] ?? '').replace(/"/g,'""') + '"').join(',')
+  )];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([rows.join('\\n')], {type:'text/csv'}));
+  a.download = 'cbi_icav_register_""" + TODAY + """.csv';
+  a.click();
+}
+
+renderIcavTable();
 
 const EU_EEA = new Set(['IE','LU','DE','FR','NL','SE','DK','AT','BE','FI','IT','ES','PT',
   'PL','CZ','HU','SK','RO','BG','HR','SI','EE','LV','LT','CY','MT','GR','NO','IS','LI','CH']);
@@ -634,9 +805,11 @@ document.getElementById('leiQuery').addEventListener('keydown', e => { if(e.key=
 let leiLoaded = false;
 
 function switchTab(t) {
-  document.querySelectorAll('.tab').forEach((el,i) => el.classList.toggle('active',(i===0&&t==='cbi')||(i===1&&t==='lei')));
-  document.getElementById('tab-cbi').classList.toggle('active',t==='cbi');
-  document.getElementById('tab-lei').classList.toggle('active',t==='lei');
+  const order = ['cbi','icav','lei'];
+  document.querySelectorAll('.tab').forEach((el,i) => el.classList.toggle('active', order[i] === t));
+  ['cbi','icav','lei'].forEach(id => {
+    document.getElementById('tab-' + id).classList.toggle('active', t === id);
+  });
   if (t === 'lei' && !leiLoaded) {
     leiLoaded = true;
     autoLoadRecentLEIs();
@@ -652,12 +825,18 @@ def main():
     os.makedirs(os.path.dirname(HTML_OUT), exist_ok=True)
 
     if not os.path.exists(CSV_PATH):
-        print("WARNING: CSV not found — writing placeholder dashboard")
-        df = pd.DataFrame(columns=["Fund Name", "ManCo", "Depositary", "Auth_Date"])
+        print("WARNING: fund CSV not found — writing placeholder dashboard")
+        df = pd.DataFrame(columns=["Fund Name", "Umbrella", "ManCo", "Depositary", "Auth_Date"])
     else:
         df = pd.read_csv(CSV_PATH)
 
-    html = build_html(df)
+    if not os.path.exists(ICAV_CSV_PATH):
+        print("WARNING: ICAV CSV not found — ICAV tab will be empty")
+        icav_df = pd.DataFrame(columns=["ICAV Name", "Reg Date", "Reg Number", "In Liquidation", "ETF Related"])
+    else:
+        icav_df = pd.read_csv(ICAV_CSV_PATH)
+
+    html = build_html(df, icav_df)
     with open(HTML_OUT, "w", encoding="utf-8") as f:
         f.write(html)
     print("Dashboard written to", HTML_OUT, "(" + str(os.path.getsize(HTML_OUT)//1024) + " KB)")
