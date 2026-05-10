@@ -34,7 +34,10 @@ def standardize_date(date_str):
             continue
     return date_str.strip()
 
-def download_pdf():
+def download_pdf(target_text=TARGET_TEXT):
+    """Download a CBI register PDF identified by the link text on the
+    downloads page. Default is the UCITS register; pass another target
+    to fetch a different register (e.g. ICAV-form AIFs)."""
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
     res = session.get(DOWNLOADS_PAGE)
@@ -49,7 +52,7 @@ def download_pdf():
     }
 
     for link in soup.find_all("a", href=True):
-        if TARGET_TEXT in link.text:
+        if target_text in link.text:
             match = re.search(r"'(.*?)'", link["href"])
             if match:
                 payload["__EVENTTARGET"] = match.group(1)
@@ -199,16 +202,16 @@ def parse_pdf_text(pdf_bytes):
 
     return records
 
-def run_sync():
+def run_sync(target_text=TARGET_TEXT, db_file=DB_FILE):
     # Preserve existing First_Seen dates
     first_seen_map = {}
-    if os.path.exists(DB_FILE):
-        existing_df = pd.read_csv(DB_FILE)
+    if os.path.exists(db_file):
+        existing_df = pd.read_csv(db_file)
         if "First_Seen" in existing_df.columns:
             for _, row in existing_df.iterrows():
                 first_seen_map[row["Fund Name"]] = row.get("First_Seen", "")
 
-    pdf_bytes = download_pdf()
+    pdf_bytes = download_pdf(target_text)
     records   = parse_pdf_text(pdf_bytes)
 
     for r in records:
@@ -219,9 +222,9 @@ def run_sync():
     df["Auth_Date_DT"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
     df = df.sort_values("Auth_Date_DT", ascending=False).drop(columns=["Auth_Date_DT"])
 
-    os.makedirs("data", exist_ok=True)
-    df.to_csv(DB_FILE, index=False)
-    print("Saved " + str(len(df)) + " records to " + DB_FILE)
+    os.makedirs(os.path.dirname(db_file) or ".", exist_ok=True)
+    df.to_csv(db_file, index=False)
+    print("Saved " + str(len(df)) + " records to " + db_file)
 
 if __name__ == "__main__":
     run_sync()
