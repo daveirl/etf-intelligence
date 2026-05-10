@@ -12,11 +12,12 @@ import re
 from datetime import date
 
 CSV_PATH      = os.path.join(os.path.dirname(__file__), "..", "data", "cbi_shadow_db.csv")
+AIF_CSV_PATH  = os.path.join(os.path.dirname(__file__), "..", "data", "aif_db.csv")
 ICAV_CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "icav_db.csv")
 HTML_OUT      = os.path.join(os.path.dirname(__file__), "..", "docs", "index.html")
 TODAY         = date.today().isoformat()
 
-def build_html(df, icav_df):
+def build_html(df, aif_df, icav_df):
     df["is_etf"] = df["Fund Name"].str.contains("ETF", case=False, na=False)
     df["Auth_Date"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
     now = pd.Timestamp(TODAY)
@@ -36,15 +37,50 @@ def build_html(df, icav_df):
     records = df[["Fund Name", "ManCo", "Depositary", "Auth_Date", "is_etf"]].fillna("").to_dict(orient="records")
     data_js = json.dumps(records, separators=(",", ":"))
 
+    # ─── AIF register (ICAV-form AIFs) ────────────────────────────────
+    aif_df = aif_df.copy()
+    if "Umbrella" not in aif_df.columns:
+        aif_df["Umbrella"] = ""
+    aif_df["Auth_Date"]  = pd.to_datetime(aif_df.get("Auth_Date", pd.Series([""] * len(aif_df))), errors="coerce")
+    aif_total            = len(aif_df)
+    aif_new_30           = int((aif_df["Auth_Date"] >= now - pd.Timedelta(days=30)).sum())
+    aif_new_90           = int((aif_df["Auth_Date"] >= now - pd.Timedelta(days=90)).sum())
+    aif_ytd              = int((aif_df["Auth_Date"].dt.year == now.year).sum())
+    aif_df["Auth_Date"]  = aif_df["Auth_Date"].dt.strftime("%Y-%m-%d").fillna("")
+    aif_df["ManCo"]      = aif_df.get("ManCo",      pd.Series([""] * len(aif_df))).fillna("")
+    aif_df["Depositary"] = aif_df.get("Depositary", pd.Series([""] * len(aif_df))).fillna("")
+    aif_df["Umbrella"]   = aif_df["Umbrella"].fillna("")
+    aif_records = aif_df[["Fund Name", "ManCo", "Depositary", "Auth_Date"]].fillna("").to_dict(orient="records")
+    aif_data_js = json.dumps(aif_records, separators=(",", ":"))
+
+    aif_manco_counts = aif_df[aif_df["ManCo"] != ""].groupby("ManCo").size().sort_values(ascending=False).head(8)
+    aif_manco_labels = json.dumps(list(aif_manco_counts.index))
+    aif_manco_values = json.dumps(list(aif_manco_counts.values.tolist()))
+    aif_dep_counts   = aif_df[aif_df["Depositary"] != ""].groupby("Depositary").size().sort_values(ascending=False).head(6)
+    aif_dep_labels   = json.dumps(list(aif_dep_counts.index))
+    aif_dep_values   = json.dumps(list(aif_dep_counts.values.tolist()))
+
     # ─── ICAV register ────────────────────────────────────────────────
-    # Match ICAVs to fund-register umbrellas (case-insensitive, exact).
-    subfund_counts = (
-        df[df["Umbrella"].str.strip() != ""]
-        .assign(_key=lambda d: d["Umbrella"].str.upper().str.strip())
-        .groupby("_key")
-        .size()
-        .to_dict()
-    )
+    # Match ICAVs to umbrellas across BOTH the UCITS and AIF registers
+    # (case-insensitive, exact). An ICAV with no UCITS sub-funds but with
+    # AIF sub-funds is therefore not flagged as "no sub-funds yet".
+    def _umbrella_counts(frame):
+        if "Umbrella" not in frame.columns or frame.empty:
+            return {}
+        s = frame["Umbrella"].fillna("").astype(str)
+        sub = frame[s.str.strip() != ""].copy()
+        if sub.empty:
+            return {}
+        sub["_key"] = sub["Umbrella"].astype(str).str.upper().str.strip()
+        return sub.groupby("_key").size().to_dict()
+
+    ucits_counts = _umbrella_counts(df)
+    aif_counts   = _umbrella_counts(aif_df)
+    subfund_counts = {}
+    for k, v in ucits_counts.items():
+        subfund_counts[k] = subfund_counts.get(k, 0) + v
+    for k, v in aif_counts.items():
+        subfund_counts[k] = subfund_counts.get(k, 0) + v
 
     icav_df = icav_df.copy()
     icav_df["ICAV Name"] = icav_df["ICAV Name"].fillna("").astype(str)
@@ -109,8 +145,8 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;fon
 .sidebar{background:var(--surface);border-right:1px solid var(--border);padding:20px;display:flex;flex-direction:column;gap:16px}
 .sidebar h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
 .filter-group{display:flex;flex-direction:column;gap:6px}
-.filter-btn,.icav-filter-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;text-align:left;transition:.15s;width:100%}
-.filter-btn:hover,.filter-btn.active,.icav-filter-btn:hover,.icav-filter-btn.active{border-color:var(--accent);color:var(--accent)}
+.filter-btn,.icav-filter-btn,.aif-filter-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;text-align:left;transition:.15s;width:100%}
+.filter-btn:hover,.filter-btn.active,.icav-filter-btn:hover,.icav-filter-btn.active,.aif-filter-btn:hover,.aif-filter-btn.active{border-color:var(--accent);color:var(--accent)}
 .icav-badge{display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;letter-spacing:.02em}
 .icav-badge.has-subs{background:#3fb95022;color:var(--green);border:1px solid #3fb95044}
 .icav-badge.no-subs{background:#f0b42922;color:var(--accent);border:1px solid #f0b42944}
@@ -187,6 +223,7 @@ tr:hover td{background:var(--surface2)}
 </header>
 <div class="tabs">
   <div class="tab active" onclick="switchTab('cbi')">CBI Fund Register</div>
+  <div class="tab" onclick="switchTab('aif')">CBI AIF Register</div>
   <div class="tab" onclick="switchTab('icav')">CBI ICAV Register</div>
   <div class="tab" onclick="switchTab('lei')">LEI Lookup</div>
 </div>
@@ -251,6 +288,70 @@ tr:hover td{background:var(--surface2)}
         <button class="page-btn" onclick="changePage(-1)">&larr; Prev</button>
         <span class="page-info" id="pageInfo"></span>
         <button class="page-btn" onclick="changePage(1)">Next &rarr;</button>
+      </div>
+    </div>
+  </main>
+</div>
+</div>
+
+<div id="tab-aif" class="tab-content">
+<div class="layout">
+  <aside class="sidebar">
+    <div class="filter-group">
+      <h3>View</h3>
+      <button class="aif-filter-btn active" onclick="setAifFilter('all',this)">All AIFs</button>
+      <button class="aif-filter-btn" onclick="setAifFilter('new30',this)">New (30d)</button>
+      <button class="aif-filter-btn" onclick="setAifFilter('new90',this)">New (90d)</button>
+    </div>
+    <div class="filter-group">
+      <h3>Auth Date From</h3>
+      <input type="date" id="aifDFrom" onchange="applyAifFilters()">
+    </div>
+    <div class="filter-group">
+      <h3>Auth Date To</h3>
+      <input type="date" id="aifDTo" onchange="applyAifFilters()">
+    </div>
+    <div class="filter-group">
+      <h3>Management Co.</h3>
+      <select id="aifSelManco" onchange="applyAifFilters()"><option value="">All ManCos</option></select>
+    </div>
+    <div class="filter-group">
+      <h3>Depositary</h3>
+      <select id="aifSelDep" onchange="applyAifFilters()"><option value="">All Depositaries</option></select>
+    </div>
+    <div class="filter-group">
+      <h3>Search</h3>
+      <input type="text" id="aifSearchBox" placeholder="Fund name&hellip;" oninput="applyAifFilters()">
+    </div>
+  </aside>
+  <main class="main">
+    <div class="stats-row">
+      <div class="stat"><div class="stat-val">""" + str(aif_total) + """</div><div class="stat-lbl">Total AIFs (ICAV-form)</div></div>
+      <div class="stat"><div class="stat-val">""" + str(aif_new_30) + """</div><div class="stat-lbl">New (30d)</div></div>
+      <div class="stat"><div class="stat-val">""" + str(aif_new_90) + """</div><div class="stat-lbl">New (90d)</div></div>
+      <div class="stat"><div class="stat-val">""" + str(aif_ytd) + """</div><div class="stat-lbl">YTD """ + str(now.year) + """</div></div>
+    </div>
+    <div class="charts-row">
+      <div class="chart-card"><h3>Top Management Companies (AIFs)</h3><div id="aifMancoChart"></div></div>
+      <div class="chart-card"><h3>Depositary Market Share (AIFs)</h3><div id="aifDepChart"></div></div>
+    </div>
+    <div class="table-wrap">
+      <div class="table-header">
+        <h2>AIF Register <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:4px">ICAV-form, ICAV Act 2015</span> <span id="aifRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
+        <button class="export-btn" onclick="exportAifCSV()">Export CSV</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
+          </tr></thead>
+          <tbody id="aifTableBody"></tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <button class="page-btn" onclick="changeAifPage(-1)">&larr; Prev</button>
+        <span class="page-info" id="aifPageInfo"></span>
+        <button class="page-btn" onclick="changeAifPage(1)">Next &rarr;</button>
       </div>
     </div>
   </main>
@@ -444,6 +545,106 @@ function buildCharts() {
     '<div class="bar-count">'+DEP_VALUES[i]+'</div></div>'
   ).join('');
 }
+
+// ─── AIF register tab (ICAV-form AIFs) ──────────────────────────────
+const AIF_DATA   = """ + aif_data_js + """;
+const AIF_MANCO_LABELS = """ + aif_manco_labels + """;
+const AIF_MANCO_VALUES = """ + aif_manco_values + """;
+const AIF_DEP_LABELS   = """ + aif_dep_labels   + """;
+const AIF_DEP_VALUES   = """ + aif_dep_values   + """;
+let aifFiltered = [...AIF_DATA];
+let aifPage = 1;
+let aifActiveFilter = 'all';
+const AIF_PAGE_SIZE = 50;
+
+function initAif() {
+  const mancos = [...new Set(AIF_DATA.map(r=>r.ManCo).filter(Boolean))].sort();
+  const deps   = [...new Set(AIF_DATA.map(r=>r.Depositary).filter(Boolean))].sort();
+  const mSel = document.getElementById('aifSelManco');
+  const dSel = document.getElementById('aifSelDep');
+  mancos.forEach(m => { const o=document.createElement('option'); o.value=o.textContent=m; mSel.appendChild(o); });
+  deps.forEach(d => { const o=document.createElement('option'); o.value=o.textContent=d; dSel.appendChild(o); });
+  applyAifFilters();
+  buildAifCharts();
+}
+
+function setAifFilter(val, btn) {
+  document.querySelectorAll('.aif-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  aifActiveFilter = val;
+  aifPage = 1;
+  applyAifFilters();
+}
+
+function applyAifFilters() {
+  const dFrom  = document.getElementById('aifDFrom').value;
+  const dTo    = document.getElementById('aifDTo').value;
+  const manco  = document.getElementById('aifSelManco').value;
+  const dep    = document.getElementById('aifSelDep').value;
+  const search = document.getElementById('aifSearchBox').value.toLowerCase();
+  aifFiltered = AIF_DATA.filter(r => {
+    if (aifActiveFilter==='new30' && (!r.Auth_Date||new Date(r.Auth_Date)<new Date(today-30*864e5))) return false;
+    if (aifActiveFilter==='new90' && (!r.Auth_Date||new Date(r.Auth_Date)<new Date(today-90*864e5))) return false;
+    if (dFrom && r.Auth_Date && r.Auth_Date<dFrom) return false;
+    if (dTo   && r.Auth_Date && r.Auth_Date>dTo)   return false;
+    if (manco && r.ManCo !== manco) return false;
+    if (dep   && r.Depositary !== dep) return false;
+    if (search && !r['Fund Name'].toLowerCase().includes(search)) return false;
+    return true;
+  });
+  renderAifTable();
+}
+
+function renderAifTable() {
+  const start = (aifPage - 1) * AIF_PAGE_SIZE;
+  const rows  = aifFiltered.slice(start, start + AIF_PAGE_SIZE);
+  document.getElementById('aifRowCount').textContent = '(' + aifFiltered.length.toLocaleString() + ' AIFs)';
+  document.getElementById('aifPageInfo').textContent  = 'Page ' + aifPage + ' of ' + (Math.ceil(aifFiltered.length / AIF_PAGE_SIZE) || 1);
+  document.getElementById('aifTableBody').innerHTML = rows.map(r =>
+    '<tr><td>' + r['Fund Name'] + '</td>' +
+    '<td>' + (r.ManCo||'') + '</td>' +
+    '<td>' + (r.Depositary||'') + '</td>' +
+    '<td class="mono-date">' + (r.Auth_Date||'') + '</td></tr>'
+  ).join('');
+}
+
+function changeAifPage(d) {
+  const max = Math.ceil(aifFiltered.length / AIF_PAGE_SIZE) || 1;
+  aifPage = Math.max(1, Math.min(max, aifPage + d));
+  renderAifTable();
+}
+
+function exportAifCSV() {
+  const cols = ['Fund Name','ManCo','Depositary','Auth_Date'];
+  const rows = [cols.join(','), ...aifFiltered.map(r =>
+    cols.map(c => '"' + (r[c]||'').replace(/"/g,'""') + '"').join(',')
+  )];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([rows.join('\\n')], {type:'text/csv'}));
+  a.download = 'cbi_aif_register_""" + TODAY + """.csv';
+  a.click();
+}
+
+function buildAifCharts() {
+  if (AIF_MANCO_VALUES.length) {
+    const maxM = Math.max(...AIF_MANCO_VALUES);
+    document.getElementById('aifMancoChart').innerHTML = AIF_MANCO_LABELS.map((label,i) =>
+      '<div class="bar-row"><div class="bar-label" title="'+label+'">'+label+'</div>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:'+(AIF_MANCO_VALUES[i]/maxM*100).toFixed(1)+'%;background:var(--accent)"></div></div>' +
+      '<div class="bar-count">'+AIF_MANCO_VALUES[i]+'</div></div>'
+    ).join('');
+  }
+  if (AIF_DEP_VALUES.length) {
+    const maxD = Math.max(...AIF_DEP_VALUES);
+    document.getElementById('aifDepChart').innerHTML = AIF_DEP_LABELS.map((label,i) =>
+      '<div class="bar-row"><div class="bar-label" title="'+label+'">'+label+'</div>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:'+(AIF_DEP_VALUES[i]/maxD*100).toFixed(1)+'%;background:var(--green)"></div></div>' +
+      '<div class="bar-count">'+AIF_DEP_VALUES[i]+'</div></div>'
+    ).join('');
+  }
+}
+
+initAif();
 
 // ─── ICAV register tab ──────────────────────────────────────────────
 const ICAV_DATA = """ + icav_data_js + """;
@@ -805,9 +1006,9 @@ document.getElementById('leiQuery').addEventListener('keydown', e => { if(e.key=
 let leiLoaded = false;
 
 function switchTab(t) {
-  const order = ['cbi','icav','lei'];
+  const order = ['cbi','aif','icav','lei'];
   document.querySelectorAll('.tab').forEach((el,i) => el.classList.toggle('active', order[i] === t));
-  ['cbi','icav','lei'].forEach(id => {
+  order.forEach(id => {
     document.getElementById('tab-' + id).classList.toggle('active', t === id);
   });
   if (t === 'lei' && !leiLoaded) {
@@ -830,13 +1031,19 @@ def main():
     else:
         df = pd.read_csv(CSV_PATH)
 
+    if not os.path.exists(AIF_CSV_PATH):
+        print("WARNING: AIF CSV not found — AIF tab will be empty")
+        aif_df = pd.DataFrame(columns=["Fund Name", "Umbrella", "ManCo", "Depositary", "Auth_Date"])
+    else:
+        aif_df = pd.read_csv(AIF_CSV_PATH)
+
     if not os.path.exists(ICAV_CSV_PATH):
         print("WARNING: ICAV CSV not found — ICAV tab will be empty")
         icav_df = pd.DataFrame(columns=["ICAV Name", "Reg Date", "Reg Number", "In Liquidation", "ETF Related"])
     else:
         icav_df = pd.read_csv(ICAV_CSV_PATH)
 
-    html = build_html(df, icav_df)
+    html = build_html(df, aif_df, icav_df)
     with open(HTML_OUT, "w", encoding="utf-8") as f:
         f.write(html)
     print("Dashboard written to", HTML_OUT, "(" + str(os.path.getsize(HTML_OUT)//1024) + " KB)")
