@@ -104,7 +104,7 @@ tr:hover td{background:var(--surface2)}
 <body>
 <header class="header">
   <div class="logo"><div class="logo-dot"></div>ETF <span>Intelligence</span></div>
-  <div class="header-meta">CBI Fund &amp; ICAV Registers &middot; Updated 2026-05-15</div>
+  <div class="header-meta">CBI Fund &amp; ICAV Registers &middot; Updated 2026-05-22</div>
 </header>
 <div class="tabs">
   <div class="tab active" onclick="switchTab('cbi')">CBI Fund Register</div>
@@ -153,8 +153,8 @@ tr:hover td{background:var(--surface2)}
       <div class="stats-row">
         <div class="stat"><div class="stat-val">6583</div><div class="stat-lbl">Total Funds</div></div>
         <div class="stat"><div class="stat-val">1899</div><div class="stat-lbl">ETFs</div></div>
-        <div class="stat"><div class="stat-val">25</div><div class="stat-lbl">New ETFs (30d)</div></div>
-        <div class="stat"><div class="stat-val">85</div><div class="stat-lbl">New ETFs (90d)</div></div>
+        <div class="stat"><div class="stat-val">18</div><div class="stat-lbl">New ETFs (30d)</div></div>
+        <div class="stat"><div class="stat-val">63</div><div class="stat-lbl">New ETFs (90d)</div></div>
         <div class="stat"><div class="stat-val">100</div><div class="stat-lbl">ETFs YTD 2026</div></div>
       </div>
       <div class="charts-row">
@@ -229,7 +229,7 @@ tr:hover td{background:var(--surface2)}
       <div class="stats-row">
         <div class="stat"><div class="stat-val">2435</div><div class="stat-lbl">Total AIFs (ICAV-form)</div></div>
         <div class="stat"><div class="stat-val">0</div><div class="stat-lbl">New (30d)</div></div>
-        <div class="stat"><div class="stat-val">47</div><div class="stat-lbl">New (90d)</div></div>
+        <div class="stat"><div class="stat-val">43</div><div class="stat-lbl">New (90d)</div></div>
         <div class="stat"><div class="stat-val">78</div><div class="stat-lbl">YTD 2026</div></div>
       </div>
       <div class="charts-row">
@@ -366,7 +366,7 @@ const PER_PAGE = 50;
 let filtered = [...ALL_DATA];
 let page = 1;
 let activeFilter = 'all';
-const today = new Date('2026-05-15');
+const today = new Date('2026-05-22');
 
 function init() {
   const mancos = [...new Set(ALL_DATA.map(r=>r.ManCo).filter(Boolean))].sort();
@@ -433,7 +433,7 @@ function exportCSV() {
   )];
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([rows.join('\n')], {type:'text/csv'}));
-  a.download = 'cbi_register_2026-05-15.csv';
+  a.download = 'cbi_register_2026-05-22.csv';
   a.click();
 }
 
@@ -556,7 +556,7 @@ function exportAifCSV() {
   )];
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([rows.join('\n')], {type:'text/csv'}));
-  a.download = 'cbi_aif_register_2026-05-15.csv';
+  a.download = 'cbi_aif_register_2026-05-22.csv';
   a.click();
 }
 
@@ -645,7 +645,7 @@ function exportIcavCSV() {
   )];
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([rows.join('\n')], {type:'text/csv'}));
-  a.download = 'cbi_icav_register_2026-05-15.csv';
+  a.download = 'cbi_icav_register_2026-05-22.csv';
   a.click();
 }
 
