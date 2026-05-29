@@ -14,10 +14,54 @@ from datetime import date
 CSV_PATH      = os.path.join(os.path.dirname(__file__), "..", "data", "cbi_shadow_db.csv")
 AIF_CSV_PATH  = os.path.join(os.path.dirname(__file__), "..", "data", "aif_db.csv")
 ICAV_CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "icav_db.csv")
+AUM_CSV_PATH  = os.path.join(os.path.dirname(__file__), "..", "data", "aum_db.csv")
 HTML_OUT      = os.path.join(os.path.dirname(__file__), "..", "docs", "index.html")
 TODAY         = date.today().isoformat()
 
-def build_html(df, aif_df, icav_df):
+
+def _normalise_name(name: str) -> str:
+    """Best-effort key for joining issuer-scrape names to CBI fund names.
+    Lower, strip share-class suffixes / UCITS/ETF/Acc/Dist tokens, squash
+    punctuation."""
+    s = (name or "").lower()
+    s = re.sub(r"\(.*?\)", " ", s)               # drop "(Acc)" / "(USD)"
+    s = re.sub(r"\b(ucits|etf|acc|dist|hdg|h)\b", " ", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s).strip()
+    return s
+
+
+def _load_aum(path: str) -> dict[str, dict]:
+    """Build a {normalised-fund-name -> AUM record} map from data/aum_db.csv."""
+    if not os.path.exists(path):
+        return {}
+    aum_df = pd.read_csv(path)
+    out: dict[str, dict] = {}
+    for _, row in aum_df.iterrows():
+        key = _normalise_name(str(row.get("fund_name", "")))
+        if not key:
+            continue
+        eur = row.get("aum_eur")
+        try:
+            eur_f = float(eur) if pd.notna(eur) and str(eur).strip() else None
+        except ValueError:
+            eur_f = None
+        if eur_f is None:
+            continue
+        # Multiple share classes per CBI sub-fund: sum them.
+        prior = out.get(key)
+        if prior:
+            prior["aum_eur"] += eur_f
+        else:
+            out[key] = {
+                "aum_eur":   eur_f,
+                "issuer":    str(row.get("issuer", "")),
+                "as_of":     str(row.get("as_of", "")),
+            }
+    return out
+
+
+def build_html(df, aif_df, icav_df, aum_map: dict[str, dict] | None = None):
+    aum_map = aum_map or {}
     df["is_etf"] = df["Fund Name"].str.contains("ETF", case=False, na=False)
     df["Auth_Date"] = pd.to_datetime(df["Auth_Date"], errors="coerce")
     now = pd.Timestamp(TODAY)
@@ -34,7 +78,15 @@ def build_html(df, aif_df, icav_df):
     df["Depositary"] = df.get("Depositary", pd.Series([""] * len(df))).fillna("")
     df["Umbrella"]   = df.get("Umbrella",   pd.Series([""] * len(df))).fillna("")
 
-    records = df[["Fund Name", "ManCo", "Depositary", "Auth_Date", "is_etf"]].fillna("").to_dict(orient="records")
+    # Attach AUM (EUR) where the issuer scrape has a name match.
+    df["aum_eur"]     = df["Fund Name"].map(lambda n: aum_map.get(_normalise_name(n), {}).get("aum_eur"))
+    df["aum_issuer"]  = df["Fund Name"].map(lambda n: aum_map.get(_normalise_name(n), {}).get("issuer", ""))
+
+    aum_covered_count = int(df["aum_eur"].notna().sum())
+    aum_total_eur     = float(df["aum_eur"].fillna(0).sum())
+
+    records = df[["Fund Name", "ManCo", "Depositary", "Auth_Date", "is_etf",
+                  "aum_eur", "aum_issuer"]].fillna("").to_dict(orient="records")
     data_js = json.dumps(records, separators=(",", ":"))
 
     # ─── AIF register (ICAV-form AIFs) ────────────────────────────────
@@ -308,6 +360,7 @@ tr:hover td{background:var(--surface2)}
         <div class="stat"><div class="stat-val">""" + str(new_90) + """</div><div class="stat-lbl">New ETFs (90d)</div></div>
         <div class="stat"><div class="stat-val">""" + str(ytd) + """</div><div class="stat-lbl">ETFs YTD """ + str(now.year) + """</div></div>
       </div>
+      <div style="font-size:11px;color:var(--muted);margin:-10px 0 14px">AUM coverage: """ + str(aum_covered_count) + """ / """ + str(total) + """ funds matched (€""" + ("%.1f bn" % (aum_total_eur / 1e9) if aum_total_eur >= 1e9 else "%.0f m" % (aum_total_eur / 1e6) if aum_total_eur > 0 else "0") + """). HANetf scraper online; WisdomTree / Global X / Tabula pending.</div>
       <div class="table-wrap" style="margin-bottom:16px">
         <div class="table-header">
           <h2>ManCo League <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:4px">UCITS register — umbrellas (ICAV / plc / Trust / etc.) and sub-funds per management company</span></h2>
@@ -339,7 +392,7 @@ tr:hover td{background:var(--surface2)}
         <div style="overflow-x:auto">
           <table>
             <thead><tr>
-              <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th>
+              <th>Fund Name</th><th>Management Co.</th><th>Depositary</th><th>Auth Date</th><th style="text-align:right">AUM (€)</th>
             </tr></thead>
             <tbody id="tableBody"></tbody>
           </table>
@@ -575,12 +628,28 @@ function renderTable() {
   const rows  = filtered.slice(start, start+PER_PAGE);
   document.getElementById('rowCount').textContent = '(' + filtered.length.toLocaleString() + ' funds)';
   document.getElementById('pageInfo').textContent  = 'Page ' + page + ' of ' + (Math.ceil(filtered.length/PER_PAGE)||1);
-  document.getElementById('tableBody').innerHTML = rows.map(r =>
-    '<tr><td>' + r['Fund Name'] + (r.is_etf?' <span class="etf-badge">ETF</span>':'') + '</td>' +
-    '<td>' + (r.ManCo||'') + '</td>' +
-    '<td>' + (r.Depositary||'') + '</td>' +
-    '<td class="mono-date">' + (r.Auth_Date||'') + '</td></tr>'
-  ).join('');
+  document.getElementById('tableBody').innerHTML = rows.map(r => {
+    const aum = (typeof r.aum_eur === 'number' || (typeof r.aum_eur === 'string' && r.aum_eur !== ''))
+      ? Number(r.aum_eur)
+      : null;
+    let aumCell;
+    if (aum === null || isNaN(aum)) {
+      aumCell = '<span style="color:var(--muted)">—</span>';
+    } else if (aum >= 1e9) {
+      aumCell = (aum/1e9).toFixed(2) + ' bn';
+    } else if (aum >= 1e6) {
+      aumCell = (aum/1e6).toFixed(1) + ' m';
+    } else {
+      aumCell = Math.round(aum).toLocaleString();
+    }
+    return '<tr><td>' + r['Fund Name'] + (r.is_etf?' <span class="etf-badge">ETF</span>':'') + '</td>' +
+      '<td>' + (r.ManCo||'') + '</td>' +
+      '<td>' + (r.Depositary||'') + '</td>' +
+      '<td class="mono-date">' + (r.Auth_Date||'') + '</td>' +
+      '<td style="text-align:right;font-family:\\'DM Mono\\',monospace"' +
+        (r.aum_issuer ? ' title="Source: ' + r.aum_issuer + ' (' + (r.aum_eur ? 'fresh' : 'stale') + ')"' : '') + '>' +
+        aumCell + '</td></tr>';
+  }).join('');
 }
 
 function changePage(d) {
@@ -1181,7 +1250,10 @@ def main():
     else:
         icav_df = pd.read_csv(ICAV_CSV_PATH)
 
-    html = build_html(df, aif_df, icav_df)
+    aum_map = _load_aum(AUM_CSV_PATH)
+    print("AUM map: " + str(len(aum_map)) + " unique fund-name keys with EUR AUM")
+
+    html = build_html(df, aif_df, icav_df, aum_map)
     with open(HTML_OUT, "w", encoding="utf-8") as f:
         f.write(html)
     print("Dashboard written to", HTML_OUT, "(" + str(os.path.getsize(HTML_OUT)//1024) + " KB)")

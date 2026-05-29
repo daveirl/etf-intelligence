@@ -42,6 +42,10 @@ jobs:
       - name: Run CBI ICAV sync
         run: python scripts/icav_sync.py
 
+      - name: Run issuer AUM sync
+        run: python scripts/aum_sync.py
+        continue-on-error: true
+
       - name: Generate dashboard
         run: python scripts/generate_dashboard.py
 
@@ -49,7 +53,7 @@ jobs:
         run: |
           git config user.name  "etf-intelligence-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add data/cbi_shadow_db.csv data/aif_db.csv data/icav_db.csv docs/index.html
+          git add data/cbi_shadow_db.csv data/aif_db.csv data/icav_db.csv data/aum_db.csv docs/index.html
           git diff --staged --quiet && exit 0
           git commit -m "chore: weekly sync $(date +'%Y-%m-%d')"
           # Rebase onto whatever has landed on main while the sync ran,
