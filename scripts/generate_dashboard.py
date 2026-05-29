@@ -111,6 +111,36 @@ def build_html(df, aif_df, icav_df):
     icav_in_liq      = sum(1 for r in icav_records if r["in_liq"])
     icav_data_js     = json.dumps(icav_records, separators=(",", ":"))
 
+    # ManCo league: distinct ICAVs and total sub-fund count per ManCo, across
+    # both the UCITS and AIF registers. An ICAV is identified as an umbrella
+    # row (Umbrella column empty) whose Fund Name contains "ICAV".
+    icav_to_manco = {}   # canonical ICAV name -> ManCo (first one wins)
+    subfunds_by_manco = {}
+    for src_df in (df, aif_df):
+        umb_mask = (src_df["Umbrella"].fillna("").str.strip() == "") & \
+                   src_df["Fund Name"].str.contains("ICAV", case=False, na=False)
+        for _, row in src_df[umb_mask].iterrows():
+            name  = str(row["Fund Name"]).strip()
+            manco = str(row.get("ManCo", "")).strip()
+            if name and manco and name not in icav_to_manco:
+                icav_to_manco[name] = manco
+        sub_mask = src_df["Umbrella"].fillna("").str.strip() != ""
+        for manco, count in src_df[sub_mask][src_df[sub_mask]["ManCo"].fillna("") != ""].groupby("ManCo").size().items():
+            subfunds_by_manco[manco] = subfunds_by_manco.get(manco, 0) + int(count)
+
+    icavs_by_manco = {}
+    for manco in icav_to_manco.values():
+        icavs_by_manco[manco] = icavs_by_manco.get(manco, 0) + 1
+
+    all_mancos = set(icavs_by_manco) | set(subfunds_by_manco)
+    league = sorted(
+        ({"manco": m, "icavs": icavs_by_manco.get(m, 0), "subfunds": subfunds_by_manco.get(m, 0)}
+         for m in all_mancos if icavs_by_manco.get(m, 0) or subfunds_by_manco.get(m, 0)),
+        key=lambda r: (r["icavs"], r["subfunds"]),
+        reverse=True,
+    )
+    manco_league_js = json.dumps(league, separators=(",", ":"))
+
     # Top ManCos by ETF count
     manco_counts = df[df["ManCo"] != ""].groupby("ManCo").size().sort_values(ascending=False).head(8)
     manco_labels = json.dumps(list(manco_counts.index))
@@ -421,29 +451,53 @@ tr:hover td{background:var(--surface2)}
     </div>
   </aside>
   <main class="main">
-    <div class="stats-row">
-      <div class="stat"><div class="stat-val">""" + str(icav_total) + """</div><div class="stat-lbl">Total ICAVs</div></div>
-      <div class="stat"><div class="stat-val">""" + str(icav_no_subs) + """</div><div class="stat-lbl">No Sub-funds Yet</div></div>
-      <div class="stat"><div class="stat-val">""" + str(icav_etf_related) + """</div><div class="stat-lbl">ETF-Related</div></div>
-      <div class="stat"><div class="stat-val">""" + str(icav_in_liq) + """</div><div class="stat-lbl">In Liquidation</div></div>
+    <div class="sub-tabs">
+      <div class="sub-tab" data-sub="icav-stats" onclick="switchSubTab('icav','stats')">Stats</div>
+      <div class="sub-tab active" data-sub="icav-results" onclick="switchSubTab('icav','results')">Results</div>
     </div>
-    <div class="table-wrap">
-      <div class="table-header">
-        <h2>ICAV Register <span id="icavRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
-        <button class="export-btn" onclick="exportIcavCSV()">Export CSV</button>
+    <div id="icav-sub-stats" class="sub-tab-content">
+      <div class="stats-row">
+        <div class="stat"><div class="stat-val">""" + str(icav_total) + """</div><div class="stat-lbl">Total ICAVs</div></div>
+        <div class="stat"><div class="stat-val">""" + str(icav_no_subs) + """</div><div class="stat-lbl">No Sub-funds Yet</div></div>
+        <div class="stat"><div class="stat-val">""" + str(icav_etf_related) + """</div><div class="stat-lbl">ETF-Related</div></div>
+        <div class="stat"><div class="stat-val">""" + str(icav_in_liq) + """</div><div class="stat-lbl">In Liquidation</div></div>
       </div>
-      <div style="overflow-x:auto">
-        <table>
-          <thead><tr>
-            <th>ICAV Name</th><th>Reg Date</th><th>Reg #</th><th style="text-align:right">Sub-funds</th><th>Status</th>
-          </tr></thead>
-          <tbody id="icavTableBody"></tbody>
-        </table>
+      <div class="table-wrap">
+        <div class="table-header">
+          <h2>ManCo League <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:4px">ICAV &amp; sub-fund counts across UCITS + AIF registers</span></h2>
+          <input type="text" id="leagueSearch" placeholder="Filter ManCo&hellip;" oninput="renderLeague()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;width:220px">
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr>
+              <th>Management Company</th>
+              <th style="text-align:right;cursor:pointer" onclick="sortLeague('icavs')">ICAVs <span id="leagueArrowIcavs">&darr;</span></th>
+              <th style="text-align:right;cursor:pointer" onclick="sortLeague('subfunds')">Sub-funds <span id="leagueArrowSubfunds"></span></th>
+            </tr></thead>
+            <tbody id="leagueBody"></tbody>
+          </table>
+        </div>
       </div>
-      <div class="pagination">
-        <button class="page-btn" onclick="changeIcavPage(-1)">&larr; Prev</button>
-        <span class="page-info" id="icavPageInfo"></span>
-        <button class="page-btn" onclick="changeIcavPage(1)">Next &rarr;</button>
+    </div>
+    <div id="icav-sub-results" class="sub-tab-content active">
+      <div class="table-wrap">
+        <div class="table-header">
+          <h2>ICAV Register <span id="icavRowCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h2>
+          <button class="export-btn" onclick="exportIcavCSV()">Export CSV</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr>
+              <th>ICAV Name</th><th>Reg Date</th><th>Reg #</th><th style="text-align:right">Sub-funds</th><th>Status</th>
+            </tr></thead>
+            <tbody id="icavTableBody"></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button class="page-btn" onclick="changeIcavPage(-1)">&larr; Prev</button>
+          <span class="page-info" id="icavPageInfo"></span>
+          <button class="page-btn" onclick="changeIcavPage(1)">Next &rarr;</button>
+        </div>
       </div>
     </div>
   </main>
@@ -722,6 +776,36 @@ const ICAV_PAGE_SIZE = 50;
 let icavFilter   = 'all';
 let icavFiltered = ICAV_DATA;
 let icavPage     = 1;
+
+// ManCo league — counts of ICAVs and sub-funds across UCITS + AIF registers
+const MANCO_LEAGUE = """ + manco_league_js + """;
+let leagueSort = 'icavs';
+
+function sortLeague(col) {
+  leagueSort = col;
+  renderLeague();
+}
+
+function renderLeague() {
+  const search = (document.getElementById('leagueSearch')?.value || '').toLowerCase();
+  const rows = MANCO_LEAGUE
+    .filter(r => !search || r.manco.toLowerCase().includes(search))
+    .slice()
+    .sort((a, b) => b[leagueSort] - a[leagueSort] || b[leagueSort === 'icavs' ? 'subfunds' : 'icavs'] - a[leagueSort === 'icavs' ? 'subfunds' : 'icavs']);
+  const arrowI = document.getElementById('leagueArrowIcavs');
+  const arrowS = document.getElementById('leagueArrowSubfunds');
+  if (arrowI && arrowS) {
+    arrowI.textContent = leagueSort === 'icavs' ? '↓' : '';
+    arrowS.textContent = leagueSort === 'subfunds' ? '↓' : '';
+  }
+  document.getElementById('leagueBody').innerHTML = rows.map(r =>
+    '<tr><td>' + r.manco + '</td>' +
+    '<td style="text-align:right;font-family:\\'DM Mono\\',monospace">' + r.icavs.toLocaleString() + '</td>' +
+    '<td style="text-align:right;font-family:\\'DM Mono\\',monospace">' + r.subfunds.toLocaleString() + '</td></tr>'
+  ).join('');
+}
+
+renderLeague();
 
 function setIcavFilter(val, btn) {
   document.querySelectorAll('.icav-filter-btn').forEach(b => b.classList.remove('active'));
