@@ -56,10 +56,15 @@ jobs:
           git add data/cbi_shadow_db.csv data/aif_db.csv data/icav_db.csv data/aum_db.csv docs/index.html
           git diff --staged --quiet && exit 0
           git commit -m "chore: weekly sync $(date +'%Y-%m-%d')"
-          # Rebase onto whatever has landed on main while the sync ran,
-          # then retry the push a few times in case of further races.
+          # Rebase onto whatever has landed on main while the sync ran. The
+          # bot only writes regenerated CSVs and dashboard HTML, so on any
+          # conflict in those files we want to keep our fresh outputs
+          # (`-X ours`). Non-conflicting changes from main are preserved.
           for attempt in 1 2 3; do
-            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            if git pull --rebase -X ours origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
             sleep 5
           done
           exit 1
