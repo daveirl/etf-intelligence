@@ -19,7 +19,18 @@ jobs:
           fetch-depth: 0
 
       - name: Install system dependencies
-        run: sudo apt-get install -y poppler-utils
+        run: |
+          # Azure's apt mirror occasionally 404s on point-release packages
+          # before the cache is refreshed — run update first, allow
+          # --fix-missing, and retry a couple of times before failing.
+          for attempt in 1 2 3; do
+            sudo apt-get update && \
+              sudo apt-get install -y --fix-missing --no-install-recommends poppler-utils && \
+              exit 0
+            echo "apt install failed, retrying in 10s (attempt $attempt/3)"
+            sleep 10
+          done
+          exit 1
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
